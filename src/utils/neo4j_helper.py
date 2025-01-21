@@ -75,41 +75,76 @@ class Neo4jHelper:
             with self.driver.session(database=self.database) as session:
                 # First check if the graph already exists and drop it if it does
                 try:
-                    session.run("CALL gds.graph.drop('doc_graph', false)")
-                except:
-                    pass  # Ignore error if graph doesn't exist
+                    session.run("CALL gds.graph.drop('doc_graph')")
+                except Exception as e:
+                    if "not found" not in str(e).lower():
+                        print(f"Error dropping existing graph: {str(e)}")
 
-                # Step 1: Create a native projection
+                # Step 1: Create a native projection using the new syntax
                 project_query = """
-                CALL gds.graph.project.cypher(
+                MATCH (source:Document)
+                WITH collect(source) AS nodes
+                CALL gds.graph.project(
                     'doc_graph',
-                    'MATCH (n:Document) RETURN id(n) AS id, n.embedding AS embedding',
-                    'MATCH (n:Document)-[r:SIMILAR]->(m:Document) RETURN id(n) AS source, id(m) AS target, r.score AS score',
+                    nodes,
+                    [],
                     {
-                        nodeProperties: ['embedding']
+                        nodeProperties: {
+                            embedding: {
+                                property: 'embedding',
+                                defaultValue: null
+                            }
+                        },
+                        readConcurrency: 4
                     }
-                )
+                ) YIELD
+                    graphName,
+                    nodeCount,
+                    relationshipCount,
+                    projectMillis
+                RETURN graphName, nodeCount, relationshipCount, projectMillis
                 """
-                session.run(project_query)
+                try:
+                    result = session.run(project_query)
+                    stats = result.single()
+                    print(f"Graph projected: {stats['graphName']}, Nodes: {stats['nodeCount']}, Time: {stats['projectMillis']}ms")
+                except Exception as e:
+                    print(f"Error projecting graph: {str(e)}")
+                    return False
 
-                # Step 2: Run node similarity
+                # Step 2: Run node similarity with updated configuration
                 similarity_query = """
-                CALL gds.nodeSimilarity.write(
-                    'doc_graph',
-                    {
-                        writeRelationshipType: 'SIMILAR',
-                        writeProperty: 'score',
-                        similarityCutoff: 0.7
-                    }
-                )
-                YIELD nodesCompared, relationshipsWritten
+                CALL gds.nodeSimilarity.write('doc_graph', {
+                    writeRelationshipType: 'SIMILAR',
+                    writeProperty: 'score',
+                    similarityCutoff: 0.7,
+                    topK: 5,
+                    similarityMetric: 'cosine',
+                    concurrency: 4,
+                    writeConcurrency: 4
+                })
+                YIELD 
+                    nodesCompared,
+                    relationshipsWritten,
+                    similarityDistribution,
+                    computeMillis
                 """
-                result = session.run(similarity_query)
-                stats = result.single()
-                print(f"Nodes compared: {stats['nodesCompared']}, Relationships written: {stats['relationshipsWritten']}")
+                try:
+                    result = session.run(similarity_query)
+                    stats = result.single()
+                    print(f"Nodes compared: {stats['nodesCompared']}")
+                    print(f"Relationships written: {stats['relationshipsWritten']}")
+                    print(f"Computation time: {stats['computeMillis']}ms")
+                    print(f"Similarity distribution: {stats['similarityDistribution']}")
+                except Exception as e:
+                    print(f"Error computing node similarity: {str(e)}")
+                    return False
 
                 # Step 3: Drop the projected graph
-                session.run("CALL gds.graph.drop('doc_graph', false)")
+                try:
+                    session.run("CALL gds.graph.drop('doc_graph')")
+                except Exception as e:
+                    print(f"Error dropping graph after computation: {str(e)}")
 
             return True
         except Exception as e:
