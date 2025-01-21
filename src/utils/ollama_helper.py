@@ -9,9 +9,9 @@ from langchain_core.output_parsers import StrOutputParser
 
 class OllamaHelper:
     def __init__(self):
-        # Initialize Ollama with llama2 70b model
+        # Initialize Ollama with llama3.3 70b model
         self.llm = Ollama(
-            model="llama2:70b",
+            model="llama3.3:70b",
             callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),
             temperature=0.1,
             top_k=10,
@@ -20,8 +20,11 @@ class OllamaHelper:
         )
 
         # Define RAG prompt template
-        self.rag_template = """You are an expert accountant and financial advisor. Use the following pieces of context to answer the question at the end. 
-        If you don't know the answer, just say that you don't know. Don't try to make up an answer.
+        self.rag_template = """You are an AI assistant using Retrieval-Augmented Generation (RAG).
+        RAG enhances your responses by retrieving relevant information from a knowledge base.
+        You will be provided with a question and relevant context. Use only this context to answer the question.
+        Do not make up an answer. If you don't know the answer, say so clearly.
+        Always strive to provide concise, helpful, and context-aware answers.
         
         Context:
         {context}
@@ -30,7 +33,7 @@ class OllamaHelper:
 
         Helpful Answer: Let me help you understand this accounting concept."""
 
-        self.qa_template = """You are an expert accountant and financial advisor. Answer the following question based on your knowledge.
+        self.qa_template = """You are an AI assistant using Retrieval-Augmented Generation (RAG). Answer the following question based on your knowledge.
         If you don't know the answer, just say that you don't know. Don't try to make up an answer.
         
         Question: {question}

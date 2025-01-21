@@ -1,6 +1,6 @@
 from typing import List, Dict, Any
 from langchain_neo4j import Neo4jVector
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from llama_index.embeddings import OllamaEmbedding
 import os
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
@@ -13,7 +13,11 @@ class Neo4jHelper:
         self.username = os.getenv("NEO4J_USERNAME", "neo4j")
         self.password = os.getenv("NEO4J_PASSWORD", "password")
         self.database = os.getenv("NEO4J_DATABASE", "neo4j")
-        self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        # Initialize Ollama embeddings with llama2 model
+        self.embeddings = OllamaEmbedding(
+            model_name="llama3.3:70b",
+            base_url="http://localhost:11434"
+        )
         self.driver = GraphDatabase.driver(self.url, auth=(self.username, self.password))
         
     def initialize_vector_store(self, documents: List[Dict[str, Any]] = None) -> Neo4jVector:
@@ -30,7 +34,7 @@ class Neo4jHelper:
                 node_label="Document",
                 text_node_property="text",
                 embedding_node_property="embedding",
-                embedding_dimension=384  # dimension for all-MiniLM-L6-v2
+                embedding_dimension=4096  # dimension for llama3.3:70b embeddings
             )
         else:
             return Neo4jVector.from_existing_index(
@@ -99,7 +103,7 @@ class Neo4jHelper:
         
         try:
             vector_store = self.initialize_vector_store()
-            query_embedding = self.embeddings.embed_query(query)
+            query_embedding = self.embeddings.get_query_embedding(query)
             
             with self.driver.session(database=self.database) as session:
                 result = session.run(

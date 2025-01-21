@@ -22,9 +22,9 @@ class Config:
         # Ollama Configuration
         self.ollama_config = {
             'base_url': os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434'),
-            'default_model': os.getenv('OLLAMA_DEFAULT_MODEL', 'llama2'),
+            'default_model': os.getenv('OLLAMA_DEFAULT_MODEL', 'llama3.3:70b'),
             'temperature': float(os.getenv('OLLAMA_TEMPERATURE', '0.7')),
-            'max_tokens': int(os.getenv('OLLAMA_MAX_TOKENS', '2048')),
+            'max_tokens': int(os.getenv('OLLAMA_MAX_TOKENS', '4096')),
         }
         
         # Document Processing Configuration
