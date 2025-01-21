@@ -15,7 +15,7 @@ class Neo4jHelper:
         self.database = os.getenv("NEO4J_DATABASE", "neo4j")
         # Initialize Ollama embeddings with llama3.3 70b model
         self.embeddings = OllamaEmbeddings(
-            model_name="llama3",
+            model="llama3.3:70b",
             base_url="http://localhost:11434"
         )
         self.driver = GraphDatabase.driver(self.url, auth=(self.username, self.password))
@@ -34,7 +34,7 @@ class Neo4jHelper:
                 node_label="Document",
                 text_node_property="text",
                 embedding_node_property="embedding",
-                embedding_dimension=2048  # dimension for llama3.3:70b embeddings
+                embedding_dimension=4096  # dimension for llama3.3:70b embeddings
             )
         else:
             return Neo4jVector.from_existing_index(
