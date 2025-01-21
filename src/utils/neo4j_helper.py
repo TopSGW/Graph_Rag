@@ -1,6 +1,6 @@
 from typing import List, Dict, Any
 from langchain_neo4j import Neo4jVector
-from llama_index.embeddings import OllamaEmbedding
+from llama_index.embeddings.ollama import OllamaEmbedding
 import os
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
