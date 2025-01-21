@@ -1,6 +1,6 @@
 from typing import List, Dict, Any
 from langchain_neo4j import Neo4jVector
-from llama_index.embeddings.ollama import OllamaEmbedding
+from langchain_community.embeddings import OllamaEmbeddings
 import os
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
@@ -14,7 +14,7 @@ class Neo4jHelper:
         self.password = os.getenv("NEO4J_PASSWORD", "password")
         self.database = os.getenv("NEO4J_DATABASE", "neo4j")
         # Initialize Ollama embeddings with llama2 model
-        self.embeddings = OllamaEmbedding(
+        self.embeddings = OllamaEmbeddings(
             model_name="llama3.3:70b",
             base_url="http://localhost:11434"
         )
@@ -103,7 +103,7 @@ class Neo4jHelper:
         
         try:
             vector_store = self.initialize_vector_store()
-            query_embedding = self.embeddings.get_query_embedding(query)
+            query_embedding = self.embeddings.embed_query(query)
             
             with self.driver.session(database=self.database) as session:
                 result = session.run(

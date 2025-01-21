@@ -1,5 +1,4 @@
 from typing import List, Dict, Any
-from langchain.callbacks.manager import CallbackManager
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 from langchain.prompts import PromptTemplate
 from langchain_ollama import OllamaLLM
@@ -14,7 +13,7 @@ class OllamaHelper:
         # Initialize Ollama with llama3.3 70b model
         self.llm = OllamaLLM(
             model="llama3.3:70b",
-            callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),
+            callbacks=[StreamingStdOutCallbackHandler()],
             temperature=0.1,
             top_k=10,
             top_p=0.95,
