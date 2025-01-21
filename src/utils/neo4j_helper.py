@@ -2,22 +2,24 @@ from typing import List, Dict, Any
 from langchain_neo4j import Neo4jVector
 from langchain_ollama import OllamaEmbeddings
 from neo4j import GraphDatabase
-from config.config import config
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
+load_dotenv(dotenv_path=env_path)
 
 class Neo4jHelper:
     def __init__(self):
-        neo4j_config = config.get_neo4j_config()
-        ollama_config = config.get_ollama_config()
-        
-        self.url = neo4j_config['uri']
-        self.username = neo4j_config['user']
-        self.password = neo4j_config['password']
-        self.database = neo4j_config['database']
+        self.url = os.getenv("NEO4J_URI", "neo4j://localhost:7687")
+        self.username = os.getenv("NEO4J_USER", "neo4j")
+        self.password = os.getenv("NEO4J_PASSWORD", "neo4j")
+        self.database = os.getenv("NEO4J_DATABASE", "neo4j")
         
         # Initialize Ollama embeddings
         self.embeddings = OllamaEmbeddings(
-            model=ollama_config['default_model'],
-            base_url=ollama_config['base_url']
+            model=os.getenv("OLLAMA_DEFAULT_MODEL", "llama3.3:70b"),
+            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         )
         self.driver = GraphDatabase.driver(self.url, auth=(self.username, self.password))
         
