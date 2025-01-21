@@ -64,6 +64,31 @@ class Neo4jHelper:
             print(f"Error checking GDS plugin: {str(e)}")
             return False
     
+    def check_graph_exists(self, graph_name: str) -> bool:
+        """Check if a named graph exists in the GDS catalog"""
+        try:
+            with self.driver.session(database=self.database) as session:
+                result = session.run(
+                    "CALL gds.graph.exists($name) YIELD exists",
+                    name=graph_name
+                )
+                return result.single()["exists"]
+        except Exception as e:
+            print(f"Error checking graph existence: {str(e)}")
+            return False
+
+    def safe_drop_graph(self, graph_name: str) -> bool:
+        """Safely drop a graph if it exists"""
+        try:
+            if self.check_graph_exists(graph_name):
+                with self.driver.session(database=self.database) as session:
+                    session.run("CALL gds.graph.drop($name)", name=graph_name)
+                    print(f"Successfully dropped graph {graph_name}")
+            return True
+        except Exception as e:
+            print(f"Error dropping graph {graph_name}: {str(e)}")
+            return False
+    
     def create_graph_relationships(self):
         """Create relationships between similar documents using cosine similarity"""
         try:
@@ -73,18 +98,14 @@ class Neo4jHelper:
                 return False
 
             with self.driver.session(database=self.database) as session:
-                # First check if the graph already exists and drop it if it does
-                try:
-                    session.run("CALL gds.graph.drop('doc_graph')")
-                except Exception as e:
-                    if "not found" not in str(e).lower():
-                        print(f"Error dropping existing graph: {str(e)}")
+                # Safely handle existing graph
+                self.safe_drop_graph("doc_graph")
 
-                # Step 1: Create a native projection using the new syntax
+                # Step 1: Create a graph projection using Cypher projection
                 project_query = """
                 MATCH (source:Document)
                 WITH collect(source) AS nodes
-                CALL gds.graph.project(
+                RETURN gds.graph.project(
                     'doc_graph',
                     nodes,
                     [],
@@ -94,20 +115,14 @@ class Neo4jHelper:
                                 property: 'embedding',
                                 defaultValue: null
                             }
-                        },
-                        readConcurrency: 4
+                        }
                     }
-                ) YIELD
-                    graphName,
-                    nodeCount,
-                    relationshipCount,
-                    projectMillis
-                RETURN graphName, nodeCount, relationshipCount, projectMillis
+                ) AS graphInfo
                 """
                 try:
                     result = session.run(project_query)
-                    stats = result.single()
-                    print(f"Graph projected: {stats['graphName']}, Nodes: {stats['nodeCount']}, Time: {stats['projectMillis']}ms")
+                    stats = result.single()["graphInfo"]
+                    print(f"Graph projected with {stats['nodeCount']} nodes")
                 except Exception as e:
                     print(f"Error projecting graph: {str(e)}")
                     return False
@@ -117,11 +132,11 @@ class Neo4jHelper:
                 CALL gds.nodeSimilarity.write('doc_graph', {
                     writeRelationshipType: 'SIMILAR',
                     writeProperty: 'score',
-                    similarityCutoff: 0.7,
+                    similarityMetric: 'COSINE',
                     topK: 5,
-                    similarityMetric: 'cosine',
+                    similarityCutoff: 0.7,
                     concurrency: 4,
-                    writeConcurrency: 4
+                    writeMode: 'WRITE'
                 })
                 YIELD 
                     nodesCompared,
@@ -138,17 +153,16 @@ class Neo4jHelper:
                     print(f"Similarity distribution: {stats['similarityDistribution']}")
                 except Exception as e:
                     print(f"Error computing node similarity: {str(e)}")
+                    self.safe_drop_graph("doc_graph")
                     return False
 
-                # Step 3: Drop the projected graph
-                try:
-                    session.run("CALL gds.graph.drop('doc_graph')")
-                except Exception as e:
-                    print(f"Error dropping graph after computation: {str(e)}")
+                # Step 3: Clean up
+                self.safe_drop_graph("doc_graph")
 
             return True
         except Exception as e:
             print(f"Error creating relationships: {str(e)}")
+            self.safe_drop_graph("doc_graph")
             return False
 
     def similarity_search_with_graph(self, query: str, k: int = 4) -> List[Dict[str, Any]]:
