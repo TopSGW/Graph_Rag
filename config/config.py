@@ -9,11 +9,11 @@ class Config:
     def __init__(self):
         """Initialize configuration with environment variables and defaults."""
         # Load environment variables from .env file
-        load_dotenv()
+        load_dotenv(dotenv_path='../.env')
         
         # Neo4j Configuration
         self.neo4j_config = {
-            'uri': os.getenv('NEO4J_URI', 'bolt://localhost:7687'),
+            'uri': os.getenv('NEO4J_URI', 'neo4j://localhost:7687'),
             'user': os.getenv('NEO4J_USER', 'neo4j'),
             'password': os.getenv('NEO4J_PASSWORD', ''),
             'database': os.getenv('NEO4J_DATABASE', 'neo4j'),

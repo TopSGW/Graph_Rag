@@ -108,11 +108,11 @@ class RAGSystem:
 async def setup_environment():
     """Setup environment and configuration"""
     # Create .env file if it doesn't exist
-    if not os.path.exists('.env'):
-        with open('.env', 'w') as f:
-            f.write("""NEO4J_URI=bolt://localhost:7687
+    if not os.path.exists('../.env'):
+        with open('../.env', 'w') as f:
+            f.write("""NEO4J_URI=neo4j://localhost:7687
 NEO4J_USERNAME=neo4j
-NEO4J_PASSWORD=password
+NEO4J_PASSWORD=smartAq!1
 NEO4J_DATABASE=neo4j""")
     
     # Load environment variables
