@@ -9,15 +9,16 @@ load_dotenv()
 
 class Neo4jHelper:
     def __init__(self):
-        self.url = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+        self.url = os.getenv("NEO4J_URI", "neo4j://localhost:7687")
         self.username = os.getenv("NEO4J_USERNAME", "neo4j")
-        self.password = os.getenv("NEO4J_PASSWORD", "password")
+        self.password = os.getenv("NEO4J_PASSWORD", "neo4j")
         self.database = os.getenv("NEO4J_DATABASE", "neo4j")
         # Initialize Ollama embeddings with llama3.3 70b model
         self.embeddings = OllamaEmbeddings(
             model="llama3.3:70b",
             base_url="http://localhost:11434"
         )
+        print(f"config info: {self.url}, {self.password}")
         self.driver = GraphDatabase.driver(self.url, auth=(self.username, self.password))
         
     def initialize_vector_store(self, documents: List[Dict[str, Any]] = None) -> Neo4jVector:
