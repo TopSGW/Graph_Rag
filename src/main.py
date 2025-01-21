@@ -14,7 +14,9 @@ console = Console()
 
 class RAGSystem:
     def __init__(self):
-        self.document_loader = DocumentLoader()
+        # Initialize with the data directory path
+        data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+        self.document_loader = DocumentLoader(directory_path=data_dir)
         self.neo4j_helper = Neo4jHelper()
         self.ollama_helper = OllamaHelper()
         self.vector_store = None
