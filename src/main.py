@@ -25,6 +25,13 @@ class RAGSystem:
         """Initialize the RAG system with documents and vector store"""
         try:
             with Progress() as progress:
+                # First check if GDS plugin is available
+                if not self.neo4j_helper.check_gds_plugin():
+                    console.print("[red]Neo4j Graph Data Science plugin is not available.")
+                    console.print("[yellow]Please install the GDS plugin in your Neo4j database.")
+                    console.print("[yellow]Visit: https://neo4j.com/docs/graph-data-science/current/installation/")
+                    return False
+
                 task1 = progress.add_task("[cyan]Loading documents...", total=1)
                 # Load documents
                 documents = self.document_loader.load_documents()
@@ -107,16 +114,36 @@ class RAGSystem:
 
 async def setup_environment():
     """Setup environment and configuration"""
+    # Get the project root directory
+    project_root = Path(__file__).parent.parent
+    env_path = project_root / '.env'
+
     # Create .env file if it doesn't exist
-    if not os.path.exists('../.env'):
-        with open('../.env', 'w') as f:
-            f.write("""NEO4J_URI=neo4j://localhost:7687
-NEO4J_USERNAME=neo4j
+    if not env_path.exists():
+        with open(env_path, 'w') as f:
+            f.write("""# Neo4j Configuration
+NEO4J_URI=neo4j://localhost:7687
+NEO4J_USER=neo4j
 NEO4J_PASSWORD=smartAq!1
-NEO4J_DATABASE=neo4j""")
+NEO4J_DATABASE=neo4j
+
+# Ollama Configuration
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_DEFAULT_MODEL=llama3.3:70b
+OLLAMA_TEMPERATURE=0.7
+OLLAMA_MAX_TOKENS=4096
+
+# Document Processing Configuration
+DATA_DIR=./data
+CHUNK_SIZE=1000
+CHUNK_OVERLAP=200
+
+# Logging Configuration
+LOG_LEVEL=INFO
+LOG_FILE=graph_rag.log""")
     
     # Load environment variables
-    load_dotenv()
+    load_dotenv(dotenv_path=env_path)
 
 async def main():
     try:

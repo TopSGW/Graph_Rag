@@ -1,24 +1,24 @@
 from typing import List, Dict, Any
 from langchain_neo4j import Neo4jVector
 from langchain_ollama import OllamaEmbeddings
-import os
-from dotenv import load_dotenv
 from neo4j import GraphDatabase
-
-load_dotenv(dotenv_path='../../.env')
+from config.config import config
 
 class Neo4jHelper:
     def __init__(self):
-        self.url = os.getenv("NEO4J_URI", "neo4j://localhost:7687")
-        self.username = os.getenv("NEO4J_USERNAME", "neo4j")
-        self.password = os.getenv("NEO4J_PASSWORD", "neo4j")
-        self.database = os.getenv("NEO4J_DATABASE", "neo4j")
-        # Initialize Ollama embeddings with llama3.3 70b model
+        neo4j_config = config.get_neo4j_config()
+        ollama_config = config.get_ollama_config()
+        
+        self.url = neo4j_config['uri']
+        self.username = neo4j_config['user']
+        self.password = neo4j_config['password']
+        self.database = neo4j_config['database']
+        
+        # Initialize Ollama embeddings
         self.embeddings = OllamaEmbeddings(
-            model="llama3.3:70b",
-            base_url="http://localhost:11434"
+            model=ollama_config['default_model'],
+            base_url=ollama_config['base_url']
         )
-        print(f"config info: {self.url}, {self.password}")
         self.driver = GraphDatabase.driver(self.url, auth=(self.username, self.password))
         
     def initialize_vector_store(self, documents: List[Dict[str, Any]] = None) -> Neo4jVector:
@@ -50,33 +50,65 @@ class Neo4jHelper:
                 embedding_node_property="embedding"
             )
     
-    def create_graph_relationships(self):
-        """Create relationships between similar documents using cosine similarity"""
-        query = """
-        CALL gds.graph.project(
-            'doc_graph',
-            'Document',
-            '*',
-            {
-                nodeProperties: ['embedding']
-            }
-        )
-        YIELD graphName;
-
-        CALL gds.nodeSimilarity.stream('doc_graph', {
-            nodeProperties: ['embedding'],
-            similarityCutoff: 0.7
-        })
-        YIELD node1, node2, similarity
-        MATCH (d1:Document) WHERE id(d1) = node1
-        MATCH (d2:Document) WHERE id(d2) = node2
-        MERGE (d1)-[r:SIMILAR {score: similarity}]->(d2);
-
-        CALL gds.graph.drop('doc_graph');
-        """
+    def check_gds_plugin(self) -> bool:
+        """Check if the Graph Data Science plugin is installed and available"""
         try:
             with self.driver.session(database=self.database) as session:
-                session.run(query)
+                result = session.run("RETURN gds.version() AS version")
+                version = result.single()["version"]
+                print(f"GDS version: {version}")
+                return True
+        except Exception as e:
+            print(f"Error checking GDS plugin: {str(e)}")
+            return False
+    
+    def create_graph_relationships(self):
+        """Create relationships between similar documents using cosine similarity"""
+        try:
+            # First check if GDS plugin is available
+            if not self.check_gds_plugin():
+                print("Neo4j Graph Data Science plugin is not available. Please install it first.")
+                return False
+
+            with self.driver.session(database=self.database) as session:
+                # First check if the graph already exists and drop it if it does
+                try:
+                    session.run("CALL gds.graph.drop('doc_graph', false)")
+                except:
+                    pass  # Ignore error if graph doesn't exist
+
+                # Step 1: Create a native projection
+                project_query = """
+                CALL gds.graph.project.cypher(
+                    'doc_graph',
+                    'MATCH (n:Document) RETURN id(n) AS id, n.embedding AS embedding',
+                    'MATCH (n:Document)-[r:SIMILAR]->(m:Document) RETURN id(n) AS source, id(m) AS target, r.score AS score',
+                    {
+                        nodeProperties: ['embedding']
+                    }
+                )
+                """
+                session.run(project_query)
+
+                # Step 2: Run node similarity
+                similarity_query = """
+                CALL gds.nodeSimilarity.write(
+                    'doc_graph',
+                    {
+                        writeRelationshipType: 'SIMILAR',
+                        writeProperty: 'score',
+                        similarityCutoff: 0.7
+                    }
+                )
+                YIELD nodesCompared, relationshipsWritten
+                """
+                result = session.run(similarity_query)
+                stats = result.single()
+                print(f"Nodes compared: {stats['nodesCompared']}, Relationships written: {stats['relationshipsWritten']}")
+
+                # Step 3: Drop the projected graph
+                session.run("CALL gds.graph.drop('doc_graph', false)")
+
             return True
         except Exception as e:
             print(f"Error creating relationships: {str(e)}")

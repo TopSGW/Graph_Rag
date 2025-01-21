@@ -8,8 +8,9 @@ class Config:
     
     def __init__(self):
         """Initialize configuration with environment variables and defaults."""
-        # Load environment variables from .env file
-        load_dotenv(dotenv_path='../.env')
+        # Load environment variables from .env file in the project root
+        env_path = Path(__file__).parent.parent / '.env'
+        load_dotenv(dotenv_path=env_path)
         
         # Neo4j Configuration
         self.neo4j_config = {
