@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "graph-rag-agent"
+version = "0.1.0"
+description = "A Graph-based RAG Agent using LangChain and Neo4j"
+authors = [
+    { name = "Project Author" }
+]
+dependencies = [
+    "langchain>=0.1.0",
+    "langchain-community>=0.0.10",
+    "langchain-core>=0.1.0",
+    "neo4j>=5.14.0",
+    "python-dotenv>=1.0.0",
+    "sentence-transformers>=2.2.2",
+    "numpy>=1.24.0",
+    "requests>=2.31.0",
+    "langchain-neo4j>=0.0.5",
+    "rich>=13.7.0",
+    "graphdatascience>=1.7"
+]
+requires-python = ">=3.9"
+
+[tool.setuptools]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3

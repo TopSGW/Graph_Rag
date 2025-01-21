@@ -1,0 +1,37 @@
+Domain Name: en.wikipedia.org
+Page Name: Direct costs
+Link: https://en.wikipedia.org/wiki/Direct_costs
+
+Full Page Contents:
+See also: Indirect costs and Joint cost
+Direct costs, in accounting, are costs directly accountable to a cost object (such as a particular project, facility, function, or product).[1]  The equivalent nomenclature in economics is specific cost.[2]
+Direct costs may be either fixed or variable, but typically comprise materials, labour, and specific expenses such as, e.g. a royalty payment to a patent holder for a given production process,[3] all, directly attributable to a cost object. Thus by industry:
+
+In construction, the costs of materials, labor, equipment, etc., and all directly involved efforts or expenses for the cost object are direct costs.
+In manufacturing or other non-construction industries, the portion of operating costs that is directly assignable to a specific product or process is a direct cost.[4]
+In project management, direct costs are those for activities or services that benefit specific projects, for example salaries for project staff and materials required for a particular project. Because these activities are easily traced to projects, their costs are usually charged to projects on an item-by-item basis.
+By contrast, indirect costs are costs not directly accountable to a cost object (such as a particular project, facility, function or product). These include administration, personnel and security costs. 
+A joint cost is a cost incurred in the production or delivery of multiple products or product lines. For instance, in civil aviation, substantial costs of a flight (pilots, fuel, wear and tear on the plane, landing and takeoff fees) are a joint cost between carrying passengers and carrying freight, and underlie economies of scope across passenger and freight services. By contrast, some costs are specific to the services, for instance, meals and flight attendants are specific costs of carrying passengers.
+
+References[edit]
+
+
+^ "Direct Cost". Investopedia. Retrieved 2021-11-09.
+
+^ "Direct Cost". Investopedia. Retrieved 2021-11-06.
+
+^ CIPS (2016), Procurement and supply workflow, published by Profex Publishing Ltd., p. 49
+
+^ Standard AACE International Recommended Practice No. 10S-90 COST ENGINEERING TERMINOLOGY TCM Framework: General Reference, Association for the Advancement of Cost Engineering International, 2010, Pg 35
+
+
+
+
+This business-related article is a stub. You can help Wikipedia by expanding it.vte
+
+
+
+
+Retrieved from "https://en.wikipedia.org/w/index.php?title=Direct_costs&oldid=1248168468"
+
+---------------------------------------------
