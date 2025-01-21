@@ -1,6 +1,6 @@
 from typing import List, Dict, Any
 from langchain_neo4j import Neo4jVector
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_ollama import OllamaEmbeddings
 import os
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
@@ -13,7 +13,7 @@ class Neo4jHelper:
         self.username = os.getenv("NEO4J_USERNAME", "neo4j")
         self.password = os.getenv("NEO4J_PASSWORD", "password")
         self.database = os.getenv("NEO4J_DATABASE", "neo4j")
-        # Initialize Ollama embeddings with llama2 model
+        # Initialize Ollama embeddings with llama3.3 70b model
         self.embeddings = OllamaEmbeddings(
             model_name="llama3.3:70b",
             base_url="http://localhost:11434"
@@ -34,7 +34,7 @@ class Neo4jHelper:
                 node_label="Document",
                 text_node_property="text",
                 embedding_node_property="embedding",
-                embedding_dimension=4096  # dimension for llama3.3:70b embeddings
+                embedding_dimension=2048  # dimension for llama3.3:70b embeddings
             )
         else:
             return Neo4jVector.from_existing_index(
