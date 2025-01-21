@@ -5,7 +5,7 @@ import os
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
 
-load_dotenv()
+load_dotenv(dotenv_path='../../.env')
 
 class Neo4jHelper:
     def __init__(self):
