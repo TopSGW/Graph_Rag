@@ -15,7 +15,7 @@ class Neo4jHelper:
         self.database = os.getenv("NEO4J_DATABASE", "neo4j")
         # Initialize Ollama embeddings with llama3.3 70b model
         self.embeddings = OllamaEmbeddings(
-            model_name="llama3.3:70b",
+            model_name="llama3",
             base_url="http://localhost:11434"
         )
         self.driver = GraphDatabase.driver(self.url, auth=(self.username, self.password))
