@@ -32,22 +32,22 @@ class Neo4jHelper:
             # Handle Unix timestamp (both seconds and milliseconds)
             if isinstance(timestamp, (int, float)):
                 dt = datetime.fromtimestamp(timestamp if timestamp < 1e12 else timestamp/1000)
-                return dt.isoformat()
+                return dt.strftime("%Y-%m-%dT%H:%M:%S")
             # Handle string timestamp
             elif isinstance(timestamp, str):
                 try:
-                    # Try parsing as ISO format first
-                    datetime.fromisoformat(timestamp)
-                    return timestamp
-                except ValueError:
                     # Try parsing as float timestamp
                     dt = datetime.fromtimestamp(float(timestamp))
-                    return dt.isoformat()
+                    return dt.strftime("%Y-%m-%dT%H:%M:%S")
+                except ValueError:
+                    # Try parsing as ISO format
+                    dt = datetime.fromisoformat(timestamp)
+                    return dt.strftime("%Y-%m-%dT%H:%M:%S")
             else:
-                return datetime.now().isoformat()
+                return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         except Exception as e:
             print(f"Error formatting datetime: {str(e)}")
-            return datetime.now().isoformat()
+            return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
     def initialize_vector_store(self, documents: List[Dict[str, Any]] = None) -> Neo4jVector:
         """Initialize Neo4j Vector store with documents if provided."""
@@ -195,7 +195,7 @@ class Neo4jHelper:
                 CREATE (d1)-[:RELATED_CONTENT {relevance: contentSimilarity}]->(d2)
                 """)
 
-                # 3. Create temporal relationships with proper datetime handling
+                # 3. Create temporal relationships with timestamp conversion
                 session.run("""
                 MATCH (d1:Document)
                 MATCH (d2:Document)
@@ -204,8 +204,8 @@ class Neo4jHelper:
                      CASE
                          WHEN d1.created_at IS NOT NULL AND d2.created_at IS NOT NULL
                          THEN duration.between(
-                             datetime(d1.created_at),
-                             datetime(d2.created_at)
+                             datetime({epochSeconds: toInteger(toFloat(d1.created_at))}),
+                             datetime({epochSeconds: toInteger(toFloat(d2.created_at))})
                          ).days
                          ELSE 0
                      END AS daysDiff
@@ -344,12 +344,18 @@ class Neo4jHelper:
             for i, text in enumerate(texts):
                 metadata = metadatas[i] if metadatas else {
                     "source": f"doc_{i}",
-                    "created_at": datetime.now().isoformat()
+                    "created_at": str(int(datetime.now().timestamp()))
                 }
                 
-                # Ensure created_at is in proper format
+                # Ensure created_at is stored as Unix timestamp string
                 if 'created_at' in metadata:
-                    metadata['created_at'] = self._format_datetime(metadata['created_at'])
+                    try:
+                        # Convert to Unix timestamp if it's not already
+                        if not isinstance(metadata['created_at'], (int, float)):
+                            dt = datetime.fromisoformat(metadata['created_at'])
+                            metadata['created_at'] = str(int(dt.timestamp()))
+                    except:
+                        metadata['created_at'] = str(int(datetime.now().timestamp()))
                 
                 doc = {
                     "page_content": text,
