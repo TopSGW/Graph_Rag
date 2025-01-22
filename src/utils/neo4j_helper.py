@@ -275,30 +275,20 @@ class Neo4jHelper:
                 session.run("""
                 MATCH (d:Document)
                 WHERE d.embedding IS NULL OR size(d.embedding) = 0
-                WITH collect(d) as invalid_docs
-                CALL {
-                    WITH invalid_docs
-                    UNWIND invalid_docs as d
-                    DETACH DELETE d
-                }
+                DETACH DELETE d
                 """)
 
                 # Create vector similarity relationships with validation
                 print("Creating similarity relationships...")
                 session.run("""
-                MATCH (d1:Document)
-                MATCH (d2:Document)
+                MATCH (d1:Document), (d2:Document)
                 WHERE id(d1) < id(d2)
                 AND d1.embedding IS NOT NULL 
                 AND d2.embedding IS NOT NULL
                 AND size(d1.embedding) > 0 
                 AND size(d2.embedding) > 0
                 AND size(d1.embedding) = size(d2.embedding)
-                WITH d1, d2
-                CALL {
-                    WITH d1, d2
-                    RETURN gds.similarity.cosine(d1.embedding, d2.embedding) AS similarity
-                }
+                WITH d1, d2, gds.similarity.cosine(d1.embedding, d2.embedding) AS similarity
                 WHERE similarity > 0.7
                 CREATE (d1)-[:SIMILAR {score: similarity}]->(d2)
                 """)
@@ -306,19 +296,14 @@ class Neo4jHelper:
                 # Create content-based relationships with validation
                 print("Creating content relationships...")
                 session.run("""
-                MATCH (d1:Document)
-                MATCH (d2:Document)
+                MATCH (d1:Document), (d2:Document)
                 WHERE id(d1) < id(d2)
                 AND d1.embedding IS NOT NULL 
                 AND d2.embedding IS NOT NULL
                 AND size(d1.embedding) > 0 
                 AND size(d2.embedding) > 0
                 AND size(d1.embedding) = size(d2.embedding)
-                WITH d1, d2
-                CALL {
-                    WITH d1, d2
-                    RETURN gds.similarity.cosine(d1.embedding, d2.embedding) AS contentSimilarity
-                }
+                WITH d1, d2, gds.similarity.cosine(d1.embedding, d2.embedding) AS contentSimilarity
                 WHERE contentSimilarity > 0.3
                 CREATE (d1)-[:RELATED_CONTENT {relevance: contentSimilarity}]->(d2)
                 """)
@@ -326,8 +311,7 @@ class Neo4jHelper:
                 # Create temporal relationships
                 print("Creating temporal relationships...")
                 session.run("""
-                MATCH (d1:Document)
-                MATCH (d2:Document)
+                MATCH (d1:Document), (d2:Document)
                 WHERE id(d1) < id(d2)
                 AND d1.created_at IS NOT NULL 
                 AND d2.created_at IS NOT NULL
@@ -345,8 +329,7 @@ class Neo4jHelper:
                 # Create file type relationships
                 print("Creating file type relationships...")
                 session.run("""
-                MATCH (d1:Document)
-                MATCH (d2:Document)
+                MATCH (d1:Document), (d2:Document)
                 WHERE id(d1) < id(d2)
                 AND d1.file_type = d2.file_type
                 CREATE (d1)-[:SHARES_TYPE]->(d2)
@@ -375,7 +358,6 @@ class Neo4jHelper:
             import traceback
             traceback.print_exc()
             return False
-
     def similarity_search_with_graph(self, query: str, k: int = 4) -> List[Dict[str, Any]]:
         """Hybrid search combining vector similarity with graph traversal"""
         try:
