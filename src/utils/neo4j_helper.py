@@ -26,12 +26,40 @@ class Neo4jHelper:
         # Initialize Neo4j driver
         self.driver = GraphDatabase.driver(self.url, auth=(self.username, self.password))
 
+    def _format_datetime(self, timestamp) -> str:
+        """Convert timestamp to ISO-8601 format"""
+        try:
+            # Handle Unix timestamp (both seconds and milliseconds)
+            if isinstance(timestamp, (int, float)):
+                dt = datetime.fromtimestamp(timestamp if timestamp < 1e12 else timestamp/1000)
+                return dt.isoformat()
+            # Handle string timestamp
+            elif isinstance(timestamp, str):
+                try:
+                    # Try parsing as ISO format first
+                    datetime.fromisoformat(timestamp)
+                    return timestamp
+                except ValueError:
+                    # Try parsing as float timestamp
+                    dt = datetime.fromtimestamp(float(timestamp))
+                    return dt.isoformat()
+            else:
+                return datetime.now().isoformat()
+        except Exception as e:
+            print(f"Error formatting datetime: {str(e)}")
+            return datetime.now().isoformat()
+
     def initialize_vector_store(self, documents: List[Dict[str, Any]] = None) -> Neo4jVector:
         """Initialize Neo4j Vector store with documents if provided."""
         try:
             if documents:
                 # Create constraints and indexes if they don't exist
                 self._create_constraints_and_indexes()
+                
+                # Format timestamps in metadata
+                for doc in documents:
+                    if 'metadata' in doc and 'created_at' in doc['metadata']:
+                        doc['metadata']['created_at'] = self._format_datetime(doc['metadata']['created_at'])
                 
                 return Neo4jVector.from_documents(
                     documents=documents,
@@ -167,16 +195,20 @@ class Neo4jHelper:
                 CREATE (d1)-[:RELATED_CONTENT {relevance: contentSimilarity}]->(d2)
                 """)
 
-                # 3. Create temporal relationships
+                # 3. Create temporal relationships with proper datetime handling
                 session.run("""
                 MATCH (d1:Document)
                 MATCH (d2:Document)
                 WHERE elementId(d1) < elementId(d2)
                 WITH d1, d2,
-                     duration.between(
-                         datetime(d1.created_at),
-                         datetime(d2.created_at)
-                     ).days AS daysDiff
+                     CASE
+                         WHEN d1.created_at IS NOT NULL AND d2.created_at IS NOT NULL
+                         THEN duration.between(
+                             datetime(d1.created_at),
+                             datetime(d2.created_at)
+                         ).days
+                         ELSE 0
+                     END AS daysDiff
                 WHERE daysDiff <= 30
                 CREATE (d1)-[:TEMPORAL {time_diff: daysDiff}]->(d2)
                 """)
@@ -310,12 +342,18 @@ class Neo4jHelper:
             # Prepare the docs
             documents = []
             for i, text in enumerate(texts):
+                metadata = metadatas[i] if metadatas else {
+                    "source": f"doc_{i}",
+                    "created_at": datetime.now().isoformat()
+                }
+                
+                # Ensure created_at is in proper format
+                if 'created_at' in metadata:
+                    metadata['created_at'] = self._format_datetime(metadata['created_at'])
+                
                 doc = {
                     "page_content": text,
-                    "metadata": metadatas[i] if metadatas else {
-                        "source": f"doc_{i}",
-                        "created_at": datetime.now().isoformat()
-                    }
+                    "metadata": metadata
                 }
                 documents.append(doc)
             
