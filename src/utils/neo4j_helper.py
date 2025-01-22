@@ -72,16 +72,12 @@ class Neo4jHelper:
             with self.driver.session(database=self.database) as session:
                 # First, try to drop the existing index if it exists
                 session.run("""
-                    CALL db.index.vector.drop($index_name)
-                    WITH count(*) as ignored
-                    CALL db.index.vector.list()
-                    YIELD name
-                    RETURN count(*) as count
-                """, index_name=self.index_name)
+                    DROP VECTOR INDEX accounting_docs IF EXISTS
+                """)
                 
                 # Create vector index using new syntax with correct dimensions
                 session.run("""
-                    CREATE VECTOR INDEX `accounting_docs` IF NOT EXISTS
+                    CREATE VECTOR INDEX accounting_docs IF NOT EXISTS
                     FOR (n:Document)
                     ON (n.embedding)
                     OPTIONS {indexConfig: {
