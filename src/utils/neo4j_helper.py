@@ -28,6 +28,7 @@ class Neo4jHelper:
         
         # Initialize Ollama embeddings
         self.embeddings = OllamaEmbeddings(
+            dimensions=4096,  # Set fixed dimensions for Neo4j compatibility
             model=os.getenv("OLLAMA_DEFAULT_MODEL", "llama3.3:70b"),
             base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         )
@@ -133,12 +134,12 @@ class Neo4jHelper:
                     for doc_id, text in documents:
                         # Get embedding and reduce dimensions
                         embedding = self.embeddings.embed_query(text)
-                        reduced_embedding = self._reduce_dimensions(embedding)
+                        # reduced_embedding = self._reduce_dimensions(embedding)
                         
                         session.run("""
                             MATCH (d:Document {id: $id})
                             SET d.embedding = $embedding
-                        """, id=doc_id, embedding=reduced_embedding)
+                        """, id=doc_id, embedding=embedding)
                     print("Vectorization complete")
         except Exception as e:
             print(f"Error vectorizing documents: {str(e)}")
@@ -149,7 +150,7 @@ class Neo4jHelper:
             doc_id = str(uuid.uuid4())
             # Get embedding and reduce dimensions
             embedding = self.embeddings.embed_query(text)
-            reduced_embedding = self._reduce_dimensions(embedding)
+            # reduced_embedding = self._reduce_dimensions(embedding)
             
             if metadata is None:
                 metadata = {}
@@ -175,7 +176,7 @@ class Neo4jHelper:
                 """, {
                     "id": doc_id,
                     "text": text,
-                    "embedding": reduced_embedding,
+                    "embedding": embedding,
                     "metadata": flattened_metadata
                 })
                 return result.single()["id"]
@@ -192,14 +193,14 @@ class Neo4jHelper:
             if text is not None:
                 # Get embedding and reduce dimensions
                 embedding = self.embeddings.embed_query(text)
-                reduced_embedding = self._reduce_dimensions(embedding)
+                # reduced_embedding = self._reduce_dimensions(embedding)
                 updates.extend([
                     "d.text = $text",
                     "d.embedding = $embedding"
                 ])
                 params.update({
                     "text": text,
-                    "embedding": reduced_embedding
+                    "embedding": embedding
                 })
             
             if metadata is not None:
@@ -228,7 +229,7 @@ class Neo4jHelper:
         try:
             # Get embedding and reduce dimensions
             query_embedding = self.embeddings.embed_query(query)
-            reduced_query_embedding = self._reduce_dimensions(query_embedding)
+            # reduced_query_embedding = self._reduce_dimensions(query_embedding)
             
             with self.driver.session(database=self.database) as session:
                 result = session.run("""
@@ -266,7 +267,7 @@ class Neo4jHelper:
                         }) AS type_docs
                 """, {
                     "index_name": self.index_name,
-                    "embedding": reduced_query_embedding,
+                    "embedding": query_embedding,
                     "k": k
                 })
                 
