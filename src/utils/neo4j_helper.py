@@ -265,71 +265,72 @@ class Neo4jHelper:
         Enhanced hybrid search combining vector similarity with graph traversal.
         Uses both vector search and graph relationships for better context.
         """
-        hybrid_query = """
-        // First, perform vector similarity search
-        WITH $query AS query
-        CALL db.index.vector.queryNodes('document_store', $k, query)
-        YIELD node, score
-
-        // Get directly similar documents
-        OPTIONAL MATCH (node)-[sim:SIMILAR]->(similar:Document)
-        
-        // Get content-related documents
-        OPTIONAL MATCH (node)-[rel:RELATED_CONTENT]->(related:Document)
-        WHERE related <> similar
-        
-        // Get temporal neighbors
-        OPTIONAL MATCH (node)-[temp:TEMPORAL]->(temporal:Document)
-        WHERE temporal <> similar AND temporal <> related
-        
-        // Get type-related documents
-        OPTIONAL MATCH (node)-[:SHARES_TYPE]->(typeRelated:Document)
-        WHERE typeRelated <> similar AND typeRelated <> related AND typeRelated <> temporal
-        
-        WITH node, score,
-             collect(DISTINCT {
-                 text: similar.text,
-                 similarity: sim.score,
-                 type: 'vector_similar',
-                 metadata: similar.metadata
-             }) AS similar_docs,
-             collect(DISTINCT {
-                 text: related.text,
-                 relevance: rel.relevance,
-                 type: 'content_related',
-                 metadata: related.metadata
-             }) AS related_docs,
-             collect(DISTINCT {
-                 text: temporal.text,
-                 time_diff: temp.time_diff,
-                 type: 'temporal',
-                 metadata: temporal.metadata
-             }) AS temporal_docs,
-             collect(DISTINCT {
-                 text: typeRelated.text,
-                 type: 'same_type',
-                 metadata: typeRelated.metadata
-             }) AS type_docs
-        
-        RETURN node.text AS text,
-               score,
-               {
-                   source: node.source,
-                   file_type: node.file_type,
-                   created_at: node.metadata.created_at,
-                   metadata: node.metadata,
-                   related_documents: similar_docs + related_docs + temporal_docs + type_docs
-               } AS metadata
-        ORDER BY score DESC
-        """
         try:
             # Embed the query text
             query_embedding = self.embeddings.embed_query(query)
             
             with self.driver.session(database=self.database) as session:
+                # Execute vector similarity search
+                vector_query = """
+                CALL db.index.vector.queryNodes('document_store', $k, $embedding)
+                YIELD node, score
+                WITH node, score
+                
+                // Get directly similar documents
+                OPTIONAL MATCH (node)-[sim:SIMILAR]->(similar:Document)
+                
+                // Get content-related documents
+                OPTIONAL MATCH (node)-[rel:RELATED_CONTENT]->(related:Document)
+                WHERE related <> similar
+                
+                // Get temporal neighbors
+                OPTIONAL MATCH (node)-[temp:TEMPORAL]->(temporal:Document)
+                WHERE temporal <> similar AND temporal <> related
+                
+                // Get type-related documents
+                OPTIONAL MATCH (node)-[:SHARES_TYPE]->(typeRelated:Document)
+                WHERE typeRelated <> similar AND typeRelated <> related AND typeRelated <> temporal
+                
+                WITH node, score,
+                     collect(DISTINCT {
+                         text: similar.text,
+                         similarity: sim.score,
+                         type: 'vector_similar',
+                         metadata: similar.metadata
+                     }) AS similar_docs,
+                     collect(DISTINCT {
+                         text: related.text,
+                         relevance: rel.relevance,
+                         type: 'content_related',
+                         metadata: related.metadata
+                     }) AS related_docs,
+                     collect(DISTINCT {
+                         text: temporal.text,
+                         time_diff: temp.time_diff,
+                         type: 'temporal',
+                         metadata: temporal.metadata
+                     }) AS temporal_docs,
+                     collect(DISTINCT {
+                         text: typeRelated.text,
+                         type: 'same_type',
+                         metadata: typeRelated.metadata
+                     }) AS type_docs
+                
+                RETURN node.text AS text,
+                       score,
+                       {
+                           source: node.source,
+                           file_type: node.file_type,
+                           created_at: node.metadata.created_at,
+                           metadata: node.metadata,
+                           related_documents: similar_docs + related_docs + temporal_docs + type_docs
+                       } AS metadata
+                ORDER BY score DESC
+                """
+                
                 result = session.run(
-                    hybrid_query,
-                    query=query_embedding,
+                    vector_query,
+                    embedding=query_embedding,
                     k=k
                 )
                 return [record.data() for record in result]
