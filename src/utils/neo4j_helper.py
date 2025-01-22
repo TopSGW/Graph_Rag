@@ -24,7 +24,7 @@ class Neo4jHelper:
         
         # Initialize Neo4j driver
         self.driver = GraphDatabase.driver(self.url, auth=(self.username, self.password))
-    
+
     def initialize_vector_store(self, documents: List[Dict[str, Any]] = None) -> Neo4jVector:
         """Initialize Neo4j Vector store with documents if provided."""
         if documents:
@@ -90,7 +90,7 @@ class Neo4jHelper:
         except Exception as e:
             print(f"Error dropping graph '{graph_name}': {str(e)}")
             return False
-    
+
     def create_graph_relationships(self):
         """
         Create relationships between similar documents using GDS nodeSimilarity
@@ -106,33 +106,33 @@ class Neo4jHelper:
                 # 1) Safely drop existing in-memory graph (if any)
                 self.safe_drop_graph("doc_graph")
 
-                # 2) Project the graph using a **native label-based** projection
-                #    We assume "Document" nodes with an "embedding" property exist in the DB.
-                #    For relationship projection, we use an empty list `[]` for now.
-                #    If you want to reuse existing relationships in the projection, pass them here.
+                # 2) Project the graph via Cypher:
+                #    We return all Document nodes, but for relationships we do a "dummy" query.
+                #    This satisfies GDS’s requirement to provide at least *some* relationship projection.
+                #    This will effectively yield 0 relationships unless any actually exist for 'SIMILAR'.
                 project_query = """
-                CALL gds.graph.project(
+                CALL gds.graph.project.cypher(
                     'doc_graph',
-                    ['Document'],
-                    [],
+                    'MATCH (d:Document) RETURN id(d) AS id',
+                    'MATCH (d:Document)-[r:SIMILAR]->(m:Document) RETURN id(d) AS source, id(m) AS target',
                     {
                         nodeProperties: ['embedding']
                     }
                 )
-                YIELD graphName, nodeCount, relationshipCount
-                RETURN graphName, nodeCount, relationshipCount
                 """
                 try:
                     result = session.run(project_query)
                     record = result.single()
-                    node_count = record["nodeCount"]
-                    rel_count  = record["relationshipCount"]
-                    print(f"Graph projected: {node_count} nodes, {rel_count} relationships.")
+                    # Typically GDS returns {graphName, nodeCount, relationshipCount}
+                    print("Graph projected via Cypher:")
+                    print(record)
                 except Exception as e:
                     print(f"Error projecting graph: {str(e)}")
                     return False
 
                 # 3) Run node similarity (cosine) on the in-memory graph
+                #    This will create SIMILAR relationships in the DB for all :Document nodes,
+                #    if your 'embedding' property is valid vectors.
                 similarity_query = """
                 CALL gds.nodeSimilarity.write('doc_graph', {
                     writeRelationshipType: 'SIMILAR',
