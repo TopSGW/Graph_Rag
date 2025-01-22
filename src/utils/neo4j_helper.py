@@ -21,10 +21,12 @@ class Neo4jHelper:
             model=os.getenv("OLLAMA_DEFAULT_MODEL", "llama3.3:70b"),
             base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         )
-        self.driver = GraphDatabase.driver(self.url, auth=(self.username, self.password))
         
+        # Initialize Neo4j driver
+        self.driver = GraphDatabase.driver(self.url, auth=(self.username, self.password))
+    
     def initialize_vector_store(self, documents: List[Dict[str, Any]] = None) -> Neo4jVector:
-        """Initialize Neo4j Vector store with documents if provided"""
+        """Initialize Neo4j Vector store with documents if provided."""
         if documents:
             return Neo4jVector.from_documents(
                 documents=documents,
@@ -53,7 +55,7 @@ class Neo4jHelper:
             )
     
     def check_gds_plugin(self) -> bool:
-        """Check if the Graph Data Science plugin is installed and available"""
+        """Check if the Graph Data Science plugin is installed and available."""
         try:
             with self.driver.session(database=self.database) as session:
                 result = session.run("RETURN gds.version() AS version")
@@ -65,7 +67,7 @@ class Neo4jHelper:
             return False
     
     def check_graph_exists(self, graph_name: str) -> bool:
-        """Check if a named graph exists in the GDS catalog"""
+        """Check if a named graph exists in the GDS catalog."""
         try:
             with self.driver.session(database=self.database) as session:
                 result = session.run(
@@ -78,7 +80,7 @@ class Neo4jHelper:
             return False
 
     def safe_drop_graph(self, graph_name: str) -> bool:
-        """Safely drop a graph if it exists"""
+        """Safely drop a graph if it exists."""
         try:
             if self.check_graph_exists(graph_name):
                 with self.driver.session(database=self.database) as session:
@@ -90,7 +92,7 @@ class Neo4jHelper:
             return False
     
     def create_graph_relationships(self):
-        """Create relationships between similar documents using cosine similarity"""
+        """Create relationships between similar documents using cosine similarity."""
         try:
             # First check if GDS plugin is available
             if not self.check_gds_plugin():
@@ -110,12 +112,7 @@ class Neo4jHelper:
                     nodes,
                     [],
                     {
-                        nodeProperties: {
-                            embedding: {
-                                property: 'embedding',
-                                defaultValue: null
-                            }
-                        }
+                        nodeProperties: ['embedding']
                     }
                 ) AS graphInfo
                 """
@@ -127,7 +124,7 @@ class Neo4jHelper:
                     print(f"Error projecting graph: {str(e)}")
                     return False
 
-                # Step 2: Run node similarity with updated configuration
+                # Step 2: Run node similarity (cosine)
                 similarity_query = """
                 CALL gds.nodeSimilarity.write('doc_graph', {
                     writeRelationshipType: 'SIMILAR',
@@ -156,7 +153,7 @@ class Neo4jHelper:
                     self.safe_drop_graph("doc_graph")
                     return False
 
-                # Step 3: Clean up
+                # Step 3: Clean up (optional, if you do not want to keep the in-memory graph)
                 self.safe_drop_graph("doc_graph")
 
             return True
@@ -167,15 +164,15 @@ class Neo4jHelper:
 
     def similarity_search_with_graph(self, query: str, k: int = 4) -> List[Dict[str, Any]]:
         """
-        Perform similarity search with graph-enhanced results
-        Returns documents along with their related documents
+        Perform similarity search with graph-enhanced results.
+        Returns documents along with their related documents.
         """
         retrieval_query = """
         WITH $query AS query
         CALL db.index.vector.queryNodes('accounting_docs', $k, query)
         YIELD node, score
         OPTIONAL MATCH (node)-[r:SIMILAR]->(related:Document)
-        WITH node, score, collect({text: related.text, similarity: r.score}) as related_docs
+        WITH node, score, collect({text: related.text, similarity: r.score}) AS related_docs
         RETURN node.text AS text, 
                score,
                {
@@ -201,7 +198,7 @@ class Neo4jHelper:
             return []
 
     def add_documents(self, texts: List[str], metadatas: List[Dict[str, Any]] = None):
-        """Add documents to the vector store"""
+        """Add documents to the vector store and create graph relationships."""
         try:
             # Convert texts and metadata to document format
             documents = []
@@ -223,5 +220,5 @@ class Neo4jHelper:
             return False
 
     def close(self):
-        """Close the Neo4j driver connection"""
+        """Close the Neo4j driver connection."""
         self.driver.close()
