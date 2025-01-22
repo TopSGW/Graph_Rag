@@ -16,6 +16,7 @@ class Neo4jHelper:
         self.username = os.getenv("NEO4J_USER", "neo4j")
         self.password = os.getenv("NEO4J_PASSWORD", "neo4j")
         self.database = os.getenv("NEO4J_DATABASE", "neo4j")
+        self.index_name = "document_vectors"  # Changed from document_store
         
         # Initialize Ollama embeddings
         self.embeddings = OllamaEmbeddings(
@@ -25,6 +26,35 @@ class Neo4jHelper:
         
         # Initialize Neo4j driver
         self.driver = GraphDatabase.driver(self.url, auth=(self.username, self.password))
+
+    def _ensure_vector_index(self):
+        """Ensure vector index exists"""
+        try:
+            with self.driver.session(database=self.database) as session:
+                # Check if index exists
+                result = session.run("""
+                    SHOW INDEXES
+                    YIELD name, type
+                    WHERE type = 'VECTOR' AND name = $index_name
+                    RETURN count(*) as count
+                """, index_name=self.index_name)
+                
+                if result.single()['count'] == 0:
+                    # Create vector index if it doesn't exist
+                    session.run("""
+                        CREATE VECTOR INDEX document_vectors IF NOT EXISTS
+                        FOR (d:Document)
+                        ON (d.embedding)
+                        OPTIONS {
+                            indexConfig: {
+                                `vector.dimensions`: 4096,
+                                `vector.similarity_function`: 'cosine'
+                            }
+                        }
+                    """)
+                    print(f"Created vector index: {self.index_name}")
+        except Exception as e:
+            print(f"Error ensuring vector index: {str(e)}")
 
     def _format_datetime(self, timestamp) -> str:
         """Convert timestamp to Unix timestamp string"""
@@ -54,6 +84,9 @@ class Neo4jHelper:
                 # Create constraints and indexes if they don't exist
                 self._create_constraints_and_indexes()
                 
+                # Ensure vector index exists
+                self._ensure_vector_index()
+                
                 # Format timestamps in metadata
                 for doc in documents:
                     if 'metadata' in doc:
@@ -69,7 +102,7 @@ class Neo4jHelper:
                     username=self.username,
                     password=self.password,
                     database=self.database,
-                    index_name="document_store",
+                    index_name=self.index_name,
                     node_label="Document",
                     text_node_property="text",
                     embedding_node_property="embedding",
@@ -82,7 +115,7 @@ class Neo4jHelper:
                     username=self.username,
                     password=self.password,
                     database=self.database,
-                    index_name="document_store",
+                    index_name=self.index_name,
                     node_label="Document",
                     text_node_property="text",
                     embedding_node_property="embedding"
@@ -272,7 +305,7 @@ class Neo4jHelper:
             with self.driver.session(database=self.database) as session:
                 # Execute vector similarity search
                 vector_query = """
-                CALL db.index.vector.queryNodes('document_store', $k, $embedding)
+                CALL db.index.vector.queryNodes($index_name, $k, $embedding)
                 YIELD node, score
                 WITH node, score
                 
@@ -330,6 +363,7 @@ class Neo4jHelper:
                 
                 result = session.run(
                     vector_query,
+                    index_name=self.index_name,
                     embedding=query_embedding,
                     k=k
                 )
