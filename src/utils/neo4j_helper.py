@@ -68,11 +68,11 @@ class Neo4jHelper:
     def _init_vector_store(self):
         """Initialize vector store and handle initial vectorization"""
         try:
-            # Check if vector index exists
+            # Check if vector index exists and drop it
             with self.driver.session(database=self.database) as session:
                 # First, try to drop the existing index if it exists
                 session.run("""
-                    DROP VECTOR INDEX accounting_docs IF EXISTS
+                    DROP INDEX accounting_docs IF EXISTS
                 """)
                 
                 # Create vector index using new syntax with correct dimensions
