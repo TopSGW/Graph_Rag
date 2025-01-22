@@ -257,32 +257,78 @@ class Neo4jHelper:
                 return False
 
             with self.driver.session(database=self.database) as session:
-                # Create vector similarity relationships
+                # First, check and log document embeddings
+                result = session.run("""
+                MATCH (d:Document)
+                RETURN 
+                    count(d) as total_docs,
+                    count(d.embedding) as docs_with_embeddings,
+                    avg(size(d.embedding)) as avg_embedding_size
+                """)
+                stats = result.single()
+                print(f"Document stats:")
+                print(f"Total documents: {stats['total_docs']}")
+                print(f"Documents with embeddings: {stats['docs_with_embeddings']}")
+                print(f"Average embedding size: {stats['avg_embedding_size']}")
+
+                # Remove invalid documents
+                session.run("""
+                MATCH (d:Document)
+                WHERE d.embedding IS NULL OR size(d.embedding) = 0
+                WITH collect(d) as invalid_docs
+                CALL {
+                    WITH invalid_docs
+                    UNWIND invalid_docs as d
+                    DETACH DELETE d
+                }
+                """)
+
+                # Create vector similarity relationships with validation
+                print("Creating similarity relationships...")
                 session.run("""
                 MATCH (d1:Document)
                 MATCH (d2:Document)
-                WHERE elementId(d1) < elementId(d2)
-                WITH d1, d2, gds.similarity.cosine(d1.embedding, d2.embedding) AS similarity
+                WHERE id(d1) < id(d2)
+                AND d1.embedding IS NOT NULL 
+                AND d2.embedding IS NOT NULL
+                AND size(d1.embedding) > 0 
+                AND size(d2.embedding) > 0
+                AND size(d1.embedding) = size(d2.embedding)
+                WITH d1, d2
+                CALL {
+                    WITH d1, d2
+                    RETURN gds.similarity.cosine(d1.embedding, d2.embedding) AS similarity
+                }
                 WHERE similarity > 0.7
                 CREATE (d1)-[:SIMILAR {score: similarity}]->(d2)
                 """)
 
-                # Create content-based relationships
+                # Create content-based relationships with validation
+                print("Creating content relationships...")
                 session.run("""
                 MATCH (d1:Document)
                 MATCH (d2:Document)
-                WHERE elementId(d1) < elementId(d2)
-                WITH d1, d2,
-                    gds.similarity.cosine(d1.embedding, d2.embedding) AS contentSimilarity
+                WHERE id(d1) < id(d2)
+                AND d1.embedding IS NOT NULL 
+                AND d2.embedding IS NOT NULL
+                AND size(d1.embedding) > 0 
+                AND size(d2.embedding) > 0
+                AND size(d1.embedding) = size(d2.embedding)
+                WITH d1, d2
+                CALL {
+                    WITH d1, d2
+                    RETURN gds.similarity.cosine(d1.embedding, d2.embedding) AS contentSimilarity
+                }
                 WHERE contentSimilarity > 0.3
                 CREATE (d1)-[:RELATED_CONTENT {relevance: contentSimilarity}]->(d2)
                 """)
 
                 # Create temporal relationships
+                print("Creating temporal relationships...")
                 session.run("""
                 MATCH (d1:Document)
                 MATCH (d2:Document)
-                WHERE elementId(d1) < elementId(d2)
+                WHERE id(d1) < id(d2)
                 AND d1.created_at IS NOT NULL 
                 AND d2.created_at IS NOT NULL
                 WITH d1, d2,
@@ -297,16 +343,37 @@ class Neo4jHelper:
                 """)
 
                 # Create file type relationships
+                print("Creating file type relationships...")
                 session.run("""
                 MATCH (d1:Document)
                 MATCH (d2:Document)
-                WHERE d1.file_type = d2.file_type AND elementId(d1) < elementId(d2)
+                WHERE id(d1) < id(d2)
+                AND d1.file_type = d2.file_type
                 CREATE (d1)-[:SHARES_TYPE]->(d2)
                 """)
+
+                # Log relationship counts
+                result = session.run("""
+                MATCH ()-[r]->()
+                RETURN 
+                    count(CASE WHEN type(r) = 'SIMILAR' THEN 1 END) as similar_count,
+                    count(CASE WHEN type(r) = 'RELATED_CONTENT' THEN 1 END) as content_count,
+                    count(CASE WHEN type(r) = 'TEMPORAL' THEN 1 END) as temporal_count,
+                    count(CASE WHEN type(r) = 'SHARES_TYPE' THEN 1 END) as type_count
+                """)
+                counts = result.single()
+                print("\nRelationship counts:")
+                print(f"Similar relationships: {counts['similar_count']}")
+                print(f"Content relationships: {counts['content_count']}")
+                print(f"Temporal relationships: {counts['temporal_count']}")
+                print(f"Type relationships: {counts['type_count']}")
 
             return True
         except Exception as e:
             print(f"Error creating relationships: {str(e)}")
+            # Print more detailed error information
+            import traceback
+            traceback.print_exc()
             return False
 
     def similarity_search_with_graph(self, query: str, k: int = 4) -> List[Dict[str, Any]]:
