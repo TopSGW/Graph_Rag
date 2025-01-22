@@ -85,46 +85,54 @@ class Neo4jHelper:
             if self.check_graph_exists(graph_name):
                 with self.driver.session(database=self.database) as session:
                     session.run("CALL gds.graph.drop($name)", name=graph_name)
-                    print(f"Successfully dropped graph {graph_name}")
+                    print(f"Successfully dropped graph '{graph_name}'")
             return True
         except Exception as e:
-            print(f"Error dropping graph {graph_name}: {str(e)}")
+            print(f"Error dropping graph '{graph_name}': {str(e)}")
             return False
     
     def create_graph_relationships(self):
-        """Create relationships between similar documents using cosine similarity."""
+        """
+        Create relationships between similar documents using GDS nodeSimilarity
+        with a cosine similarity metric.
+        """
         try:
-            # First check if GDS plugin is available
+            # Check if the GDS plugin is available
             if not self.check_gds_plugin():
                 print("Neo4j Graph Data Science plugin is not available. Please install it first.")
                 return False
 
             with self.driver.session(database=self.database) as session:
-                # Safely handle existing graph
+                # 1) Safely drop existing in-memory graph (if any)
                 self.safe_drop_graph("doc_graph")
 
-                # Step 1: Create a graph projection using Cypher projection
+                # 2) Project the graph using a **native label-based** projection
+                #    We assume "Document" nodes with an "embedding" property exist in the DB.
+                #    For relationship projection, we use an empty list `[]` for now.
+                #    If you want to reuse existing relationships in the projection, pass them here.
                 project_query = """
-                MATCH (source:Document)
-                WITH collect(source) AS nodes
-                RETURN gds.graph.project(
+                CALL gds.graph.project(
                     'doc_graph',
-                    nodes,
-                    [],
+                    ['Document'],    -- node label
+                    [],             -- no existing relationships to project
                     {
                         nodeProperties: ['embedding']
                     }
-                ) AS graphInfo
+                )
+                YIELD graphName, nodeCount, relationshipCount
+                RETURN graphName, nodeCount, relationshipCount
                 """
                 try:
                     result = session.run(project_query)
-                    stats = result.single()["graphInfo"]
-                    print(f"Graph projected with {stats['nodeCount']} nodes")
+                    record = result.single()
+                    node_count = record["nodeCount"]
+                    rel_count  = record["relationshipCount"]
+                    print(f"Graph projected: {node_count} nodes, {rel_count} relationships.")
                 except Exception as e:
                     print(f"Error projecting graph: {str(e)}")
                     return False
 
-                # Step 2: Run node similarity (cosine)
+                # 3) Run node similarity (cosine) on the in-memory graph
                 similarity_query = """
                 CALL gds.nodeSimilarity.write('doc_graph', {
                     writeRelationshipType: 'SIMILAR',
@@ -135,7 +143,7 @@ class Neo4jHelper:
                     concurrency: 4,
                     writeMode: 'WRITE'
                 })
-                YIELD 
+                YIELD
                     nodesCompared,
                     relationshipsWritten,
                     similarityDistribution,
@@ -146,14 +154,15 @@ class Neo4jHelper:
                     stats = result.single()
                     print(f"Nodes compared: {stats['nodesCompared']}")
                     print(f"Relationships written: {stats['relationshipsWritten']}")
-                    print(f"Computation time: {stats['computeMillis']}ms")
+                    print(f"Computation time (ms): {stats['computeMillis']}")
                     print(f"Similarity distribution: {stats['similarityDistribution']}")
                 except Exception as e:
                     print(f"Error computing node similarity: {str(e)}")
+                    # Clean up in-memory graph if desired
                     self.safe_drop_graph("doc_graph")
                     return False
 
-                # Step 3: Clean up (optional, if you do not want to keep the in-memory graph)
+                # 4) Optionally drop the in-memory graph if you don't need it to persist
                 self.safe_drop_graph("doc_graph")
 
             return True
@@ -164,8 +173,8 @@ class Neo4jHelper:
 
     def similarity_search_with_graph(self, query: str, k: int = 4) -> List[Dict[str, Any]]:
         """
-        Perform similarity search with graph-enhanced results.
-        Returns documents along with their related documents.
+        Perform similarity search with the vector index, then also match any 'SIMILAR' relationships
+        that might have been written by the GDS nodeSimilarity procedure.
         """
         retrieval_query = """
         WITH $query AS query
@@ -181,9 +190,8 @@ class Neo4jHelper:
                } AS metadata
         ORDER BY score DESC
         """
-        
         try:
-            vector_store = self.initialize_vector_store()
+            # We need to embed the query text first
             query_embedding = self.embeddings.embed_query(query)
             
             with self.driver.session(database=self.database) as session:
@@ -198,9 +206,12 @@ class Neo4jHelper:
             return []
 
     def add_documents(self, texts: List[str], metadatas: List[Dict[str, Any]] = None):
-        """Add documents to the vector store and create graph relationships."""
+        """
+        Add new documents (text + metadata) to the vector index,
+        then create SIMILAR relationships using the GDS Node Similarity.
+        """
         try:
-            # Convert texts and metadata to document format
+            # Prepare the docs
             documents = []
             for i, text in enumerate(texts):
                 doc = {
@@ -209,10 +220,10 @@ class Neo4jHelper:
                 }
                 documents.append(doc)
             
-            # Initialize vector store with documents
+            # Insert into the Neo4j vector store (writes the embeddings + text into the DB)
             self.initialize_vector_store(documents)
             
-            # Create graph relationships
+            # Create relationships (optionally using GDS nodeSimilarity)
             self.create_graph_relationships()
             return True
         except Exception as e:
