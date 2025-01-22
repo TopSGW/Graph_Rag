@@ -27,27 +27,25 @@ class Neo4jHelper:
         self.driver = GraphDatabase.driver(self.url, auth=(self.username, self.password))
 
     def _format_datetime(self, timestamp) -> str:
-        """Convert timestamp to ISO-8601 format"""
+        """Convert timestamp to Unix timestamp string"""
         try:
             # Handle Unix timestamp (both seconds and milliseconds)
             if isinstance(timestamp, (int, float)):
-                dt = datetime.fromtimestamp(timestamp if timestamp < 1e12 else timestamp/1000)
-                return dt.strftime("%Y-%m-%dT%H:%M:%S")
+                return str(int(timestamp if timestamp < 1e12 else timestamp/1000))
             # Handle string timestamp
             elif isinstance(timestamp, str):
                 try:
                     # Try parsing as float timestamp
-                    dt = datetime.fromtimestamp(float(timestamp))
-                    return dt.strftime("%Y-%m-%dT%H:%M:%S")
+                    return str(int(float(timestamp)))
                 except ValueError:
                     # Try parsing as ISO format
                     dt = datetime.fromisoformat(timestamp)
-                    return dt.strftime("%Y-%m-%dT%H:%M:%S")
+                    return str(int(dt.timestamp()))
             else:
-                return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+                return str(int(datetime.now().timestamp()))
         except Exception as e:
             print(f"Error formatting datetime: {str(e)}")
-            return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            return str(int(datetime.now().timestamp()))
 
     def initialize_vector_store(self, documents: List[Dict[str, Any]] = None) -> Neo4jVector:
         """Initialize Neo4j Vector store with documents if provided."""
@@ -58,8 +56,11 @@ class Neo4jHelper:
                 
                 # Format timestamps in metadata
                 for doc in documents:
-                    if 'metadata' in doc and 'created_at' in doc['metadata']:
-                        doc['metadata']['created_at'] = self._format_datetime(doc['metadata']['created_at'])
+                    if 'metadata' in doc:
+                        if 'created_at' not in doc['metadata']:
+                            doc['metadata']['created_at'] = str(int(datetime.now().timestamp()))
+                        else:
+                            doc['metadata']['created_at'] = self._format_datetime(doc['metadata']['created_at'])
                 
                 return Neo4jVector.from_documents(
                     documents=documents,
@@ -195,19 +196,19 @@ class Neo4jHelper:
                 CREATE (d1)-[:RELATED_CONTENT {relevance: contentSimilarity}]->(d2)
                 """)
 
-                # 3. Create temporal relationships with timestamp conversion
+                # 3. Create temporal relationships with proper null handling
                 session.run("""
                 MATCH (d1:Document)
                 MATCH (d2:Document)
                 WHERE elementId(d1) < elementId(d2)
+                AND d1.metadata.created_at IS NOT NULL 
+                AND d2.metadata.created_at IS NOT NULL
                 WITH d1, d2,
                      CASE
-                         WHEN d1.created_at IS NOT NULL AND d2.created_at IS NOT NULL
-                         THEN duration.between(
-                             datetime({epochSeconds: toInteger(toFloat(d1.created_at))}),
-                             datetime({epochSeconds: toInteger(toFloat(d2.created_at))})
-                         ).days
-                         ELSE 0
+                         WHEN d1.metadata.created_at IS NOT NULL 
+                              AND d2.metadata.created_at IS NOT NULL
+                         THEN abs(toInteger(d1.metadata.created_at) - toInteger(d2.metadata.created_at)) / 86400
+                         ELSE 999999
                      END AS daysDiff
                 WHERE daysDiff <= 30
                 CREATE (d1)-[:TEMPORAL {time_diff: daysDiff}]->(d2)
@@ -244,7 +245,7 @@ class Neo4jHelper:
                         }
                     },
                     {
-                        nodeProperties: ['embedding', 'text', 'file_type', 'created_at']
+                        nodeProperties: ['embedding', 'text', 'file_type', 'metadata']
                     }
                 )
                 """
@@ -315,7 +316,7 @@ class Neo4jHelper:
                {
                    source: node.source,
                    file_type: node.file_type,
-                   created_at: node.created_at,
+                   created_at: node.metadata.created_at,
                    metadata: node.metadata,
                    related_documents: similar_docs + related_docs + temporal_docs + type_docs
                } AS metadata
@@ -341,21 +342,19 @@ class Neo4jHelper:
         try:
             # Prepare the docs
             documents = []
+            current_time = str(int(datetime.now().timestamp()))
+            
             for i, text in enumerate(texts):
                 metadata = metadatas[i] if metadatas else {
                     "source": f"doc_{i}",
-                    "created_at": str(int(datetime.now().timestamp()))
+                    "created_at": current_time
                 }
                 
-                # Ensure created_at is stored as Unix timestamp string
-                if 'created_at' in metadata:
-                    try:
-                        # Convert to Unix timestamp if it's not already
-                        if not isinstance(metadata['created_at'], (int, float)):
-                            dt = datetime.fromisoformat(metadata['created_at'])
-                            metadata['created_at'] = str(int(dt.timestamp()))
-                    except:
-                        metadata['created_at'] = str(int(datetime.now().timestamp()))
+                # Ensure created_at exists and is in the correct format
+                if 'created_at' not in metadata:
+                    metadata['created_at'] = current_time
+                else:
+                    metadata['created_at'] = self._format_datetime(metadata['created_at'])
                 
                 doc = {
                     "page_content": text,
