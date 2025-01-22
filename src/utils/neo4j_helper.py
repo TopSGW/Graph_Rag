@@ -106,20 +106,31 @@ class Neo4jHelper:
                 # 1) Safely drop existing in-memory graph (if any)
                 self.safe_drop_graph("doc_graph")
 
-                # 2) Project the graph via Cypher:
-                # Modified to include embedding property in the node query
+                # 2) Project the graph using the new syntax
                 project_query = """
-                CALL gds.graph.project.cypher(
+                CALL gds.graph.project(
                     'doc_graph',
-                    'MATCH (d:Document) RETURN id(d) AS id, d.embedding AS embedding',
-                    'MATCH (d:Document)-[r:SIMILAR]->(m:Document) RETURN id(d) AS source, id(m) AS target'
+                    {
+                        Document: {
+                            properties: {
+                                embedding: {
+                                    property: 'embedding'
+                                }
+                            }
+                        }
+                    },
+                    {
+                        SIMILAR: {
+                            type: 'SIMILAR',
+                            orientation: 'UNDIRECTED'
+                        }
+                    }
                 )
                 """
                 try:
                     result = session.run(project_query)
                     record = result.single()
-                    # Typically GDS returns {graphName, nodeCount, relationshipCount}
-                    print("Graph projected via Cypher:")
+                    print("Graph projected:")
                     print(record)
                 except Exception as e:
                     print(f"Error projecting graph: {str(e)}")
@@ -133,8 +144,7 @@ class Neo4jHelper:
                     similarityMetric: 'COSINE',
                     topK: 5,
                     similarityCutoff: 0.7,
-                    concurrency: 4,
-                    writeMode: 'WRITE'
+                    concurrency: 4
                 })
                 YIELD
                     nodesCompared,
