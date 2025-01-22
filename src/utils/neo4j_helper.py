@@ -113,8 +113,8 @@ class Neo4jHelper:
                 project_query = """
                 CALL gds.graph.project(
                     'doc_graph',
-                    ['Document'],    -- node label
-                    [],             -- no existing relationships to project
+                    ['Document'],
+                    [],
                     {
                         nodeProperties: ['embedding']
                     }
