@@ -5,6 +5,7 @@ from neo4j import GraphDatabase
 import os
 from dotenv import load_dotenv
 from datetime import datetime
+import time
 
 # Load environment variables
 env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
@@ -16,7 +17,7 @@ class Neo4jHelper:
         self.username = os.getenv("NEO4J_USER", "neo4j")
         self.password = os.getenv("NEO4J_PASSWORD", "neo4j")
         self.database = os.getenv("NEO4J_DATABASE", "neo4j")
-        self.index_name = "document_vectors"  # Changed from document_store
+        self.index_name = "embedding_index"  # Changed to a more descriptive name
         
         # Initialize Ollama embeddings
         self.embeddings = OllamaEmbeddings(
@@ -27,55 +28,59 @@ class Neo4jHelper:
         # Initialize Neo4j driver
         self.driver = GraphDatabase.driver(self.url, auth=(self.username, self.password))
 
+    def _wait_for_index_online(self, index_name: str, max_attempts: int = 10) -> bool:
+        """Wait for the index to come online"""
+        attempt = 0
+        while attempt < max_attempts:
+            try:
+                with self.driver.session(database=self.database) as session:
+                    result = session.run("""
+                        SHOW INDEXES
+                        YIELD name, state
+                        WHERE name = $index_name
+                        RETURN state
+                    """, index_name=index_name)
+                    record = result.single()
+                    if record and record["state"] == "ONLINE":
+                        return True
+                    time.sleep(1)
+                    attempt += 1
+            except Exception as e:
+                print(f"Error checking index state: {str(e)}")
+                time.sleep(1)
+                attempt += 1
+        return False
+
     def _ensure_vector_index(self):
-        """Ensure vector index exists"""
+        """Ensure vector index exists and is online"""
         try:
             with self.driver.session(database=self.database) as session:
-                # Check if index exists
-                result = session.run("""
-                    SHOW INDEXES
-                    YIELD name, type
-                    WHERE type = 'VECTOR' AND name = $index_name
-                    RETURN count(*) as count
-                """, index_name=self.index_name)
+                # Drop existing index if it exists
+                session.run("""
+                    DROP INDEX embedding_index IF EXISTS
+                """)
                 
-                if result.single()['count'] == 0:
-                    # Create vector index if it doesn't exist
-                    session.run("""
-                        CREATE VECTOR INDEX document_vectors IF NOT EXISTS
-                        FOR (d:Document)
-                        ON (d.embedding)
-                        OPTIONS {
-                            indexConfig: {
-                                `vector.dimensions`: 4096,
-                                `vector.similarity_function`: 'cosine'
-                            }
+                # Create the vector index
+                session.run("""
+                    CREATE VECTOR INDEX embedding_index
+                    FOR (d:Document)
+                    ON (d.embedding)
+                    OPTIONS {
+                        indexConfig: {
+                            `vector.dimensions`: 4096,
+                            `vector.similarity_function`: 'cosine'
                         }
-                    """)
-                    print(f"Created vector index: {self.index_name}")
+                    }
+                """)
+                
+                # Wait for the index to come online
+                if not self._wait_for_index_online("embedding_index"):
+                    raise Exception("Vector index failed to come online")
+                
+                print("Vector index created and online")
         except Exception as e:
             print(f"Error ensuring vector index: {str(e)}")
-
-    def _format_datetime(self, timestamp) -> str:
-        """Convert timestamp to Unix timestamp string"""
-        try:
-            # Handle Unix timestamp (both seconds and milliseconds)
-            if isinstance(timestamp, (int, float)):
-                return str(int(timestamp if timestamp < 1e12 else timestamp/1000))
-            # Handle string timestamp
-            elif isinstance(timestamp, str):
-                try:
-                    # Try parsing as float timestamp
-                    return str(int(float(timestamp)))
-                except ValueError:
-                    # Try parsing as ISO format
-                    dt = datetime.fromisoformat(timestamp)
-                    return str(int(dt.timestamp()))
-            else:
-                return str(int(datetime.now().timestamp()))
-        except Exception as e:
-            print(f"Error formatting datetime: {str(e)}")
-            return str(int(datetime.now().timestamp()))
+            raise
 
     def initialize_vector_store(self, documents: List[Dict[str, Any]] = None) -> Neo4jVector:
         """Initialize Neo4j Vector store with documents if provided."""
@@ -84,7 +89,7 @@ class Neo4jHelper:
                 # Create constraints and indexes if they don't exist
                 self._create_constraints_and_indexes()
                 
-                # Ensure vector index exists
+                # Ensure vector index exists and is online
                 self._ensure_vector_index()
                 
                 # Format timestamps in metadata
@@ -123,6 +128,27 @@ class Neo4jHelper:
         except Exception as e:
             print(f"Error initializing vector store: {str(e)}")
             return None
+
+    def _format_datetime(self, timestamp) -> str:
+        """Convert timestamp to Unix timestamp string"""
+        try:
+            # Handle Unix timestamp (both seconds and milliseconds)
+            if isinstance(timestamp, (int, float)):
+                return str(int(timestamp if timestamp < 1e12 else timestamp/1000))
+            # Handle string timestamp
+            elif isinstance(timestamp, str):
+                try:
+                    # Try parsing as float timestamp
+                    return str(int(float(timestamp)))
+                except ValueError:
+                    # Try parsing as ISO format
+                    dt = datetime.fromisoformat(timestamp)
+                    return str(int(dt.timestamp()))
+            else:
+                return str(int(datetime.now().timestamp()))
+        except Exception as e:
+            print(f"Error formatting datetime: {str(e)}")
+            return str(int(datetime.now().timestamp()))
 
     def _create_constraints_and_indexes(self):
         """Create necessary constraints and indexes"""
