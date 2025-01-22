@@ -34,14 +34,14 @@ class Neo4jHelper:
         
         # Initialize vector store and cache
         self._init_vector_store()
-        
+
     def check_gds_plugin(self) -> bool:
         """Check if the Graph Data Science plugin is installed and available."""
         try:
             with self.driver.session(database=self.database) as session:
                 # Try to call a GDS function to verify plugin is installed and working
-                result = session.run("CALL gds.version() YIELD version")
-                version = result.single()["version"]
+                result = session.run("CALL gds.version() YIELD gdsVersion")
+                version = result.single()["gdsVersion"]
                 print(f"Neo4j Graph Data Science plugin version: {version}")
                 return True
         except Exception as e:
@@ -71,7 +71,7 @@ class Neo4jHelper:
                             $index_name,
                             'Document',
                             'embedding',
-                            8192,
+                            4096,
                             'cosine'
                         )
                     """, index_name=self.index_name)
