@@ -107,17 +107,12 @@ class Neo4jHelper:
                 self.safe_drop_graph("doc_graph")
 
                 # 2) Project the graph via Cypher:
-                #    We return all Document nodes, but for relationships we do a "dummy" query.
-                #    This satisfies GDS’s requirement to provide at least *some* relationship projection.
-                #    This will effectively yield 0 relationships unless any actually exist for 'SIMILAR'.
+                # Modified to include embedding property in the node query
                 project_query = """
                 CALL gds.graph.project.cypher(
                     'doc_graph',
-                    'MATCH (d:Document) RETURN id(d) AS id',
-                    'MATCH (d:Document)-[r:SIMILAR]->(m:Document) RETURN id(d) AS source, id(m) AS target',
-                    {
-                        nodeProperties: ['embedding']
-                    }
+                    'MATCH (d:Document) RETURN id(d) AS id, d.embedding AS embedding',
+                    'MATCH (d:Document)-[r:SIMILAR]->(m:Document) RETURN id(d) AS source, id(m) AS target'
                 )
                 """
                 try:
@@ -131,8 +126,6 @@ class Neo4jHelper:
                     return False
 
                 # 3) Run node similarity (cosine) on the in-memory graph
-                #    This will create SIMILAR relationships in the DB for all :Document nodes,
-                #    if your 'embedding' property is valid vectors.
                 similarity_query = """
                 CALL gds.nodeSimilarity.write('doc_graph', {
                     writeRelationshipType: 'SIMILAR',
