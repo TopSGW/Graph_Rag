@@ -17,6 +17,7 @@ class Neo4jHelper:
         self.username = os.getenv("NEO4J_USER", "neo4j")
         self.password = os.getenv("NEO4J_PASSWORD", "neo4j")
         self.database = os.getenv("NEO4J_DATABASE", "neo4j")
+        self.index_name = "accounting_docs"  # Changed to match existing index
         
         # Initialize Ollama embeddings
         self.embeddings = OllamaEmbeddings(
@@ -45,7 +46,7 @@ class Neo4jHelper:
                     # Create vector index if it doesn't exist
                     session.run("""
                         CALL db.index.vector.createNodeIndex(
-                            'document_embedding',
+                            'accounting_docs',
                             'Document',
                             'embedding',
                             4096,
@@ -103,7 +104,7 @@ class Neo4jHelper:
                     username=self.username,
                     password=self.password,
                     database=self.database,
-                    index_name="document_embedding",
+                    index_name=self.index_name,
                     node_label="Document",
                     text_node_property="text",
                     embedding_node_property="embedding",
@@ -116,7 +117,7 @@ class Neo4jHelper:
                     username=self.username,
                     password=self.password,
                     database=self.database,
-                    index_name="document_embedding",
+                    index_name=self.index_name,
                     node_label="Document",
                     text_node_property="text",
                     embedding_node_property="embedding"
@@ -310,7 +311,7 @@ class Neo4jHelper:
             with self.driver.session(database=self.database) as session:
                 # Execute vector similarity search
                 vector_query = """
-                CALL db.index.vector.queryNodes('document_embedding', $k, $embedding)
+                CALL db.index.vector.queryNodes($index_name, $k, $embedding)
                 YIELD node, score
                 WITH node, score
                 
@@ -368,6 +369,7 @@ class Neo4jHelper:
                 
                 result = session.run(
                     vector_query,
+                    index_name=self.index_name,
                     embedding=query_embedding,
                     k=k
                 )
