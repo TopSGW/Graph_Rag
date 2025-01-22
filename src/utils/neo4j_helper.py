@@ -106,7 +106,7 @@ class Neo4jHelper:
                 # 1) Safely drop existing in-memory graph (if any)
                 self.safe_drop_graph("doc_graph")
 
-                # 2) Project the graph using the new syntax
+                # 2) Project the graph with only nodes and their embeddings
                 project_query = """
                 CALL gds.graph.project(
                     'doc_graph',
@@ -119,12 +119,7 @@ class Neo4jHelper:
                             }
                         }
                     },
-                    {
-                        SIMILAR: {
-                            type: 'SIMILAR',
-                            orientation: 'UNDIRECTED'
-                        }
-                    }
+                    '*'
                 )
                 """
                 try:
