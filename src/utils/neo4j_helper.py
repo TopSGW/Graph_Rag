@@ -146,35 +146,32 @@ class Neo4jHelper:
 
             with self.driver.session(database=self.database) as session:
                 # First create the relationships in the database
-                # 1. Create vector similarity relationships
+                # 1. Create vector similarity relationships using elementId()
                 session.run("""
                 MATCH (d1:Document)
                 MATCH (d2:Document)
-                WHERE id(d1) < id(d2)
+                WHERE elementId(d1) < elementId(d2)
                 WITH d1, d2, gds.similarity.cosine(d1.embedding, d2.embedding) AS similarity
                 WHERE similarity > 0.7
                 CREATE (d1)-[:SIMILAR {score: similarity}]->(d2)
                 """)
 
-                # 2. Create content-based relationships
+                # 2. Create content-based relationships using embeddings
                 session.run("""
                 MATCH (d1:Document)
                 MATCH (d2:Document)
-                WHERE id(d1) < id(d2)
+                WHERE elementId(d1) < elementId(d2)
                 WITH d1, d2,
-                     gds.similarity.cosine(
-                         split(d1.text, ' '),
-                         split(d2.text, ' ')
-                     ) AS textSimilarity
-                WHERE textSimilarity > 0.3
-                CREATE (d1)-[:RELATED_CONTENT {relevance: textSimilarity}]->(d2)
+                     gds.similarity.cosine(d1.embedding, d2.embedding) AS contentSimilarity
+                WHERE contentSimilarity > 0.3
+                CREATE (d1)-[:RELATED_CONTENT {relevance: contentSimilarity}]->(d2)
                 """)
 
                 # 3. Create temporal relationships
                 session.run("""
                 MATCH (d1:Document)
                 MATCH (d2:Document)
-                WHERE id(d1) < id(d2)
+                WHERE elementId(d1) < elementId(d2)
                 WITH d1, d2,
                      duration.between(
                          datetime(d1.created_at),
@@ -188,7 +185,7 @@ class Neo4jHelper:
                 session.run("""
                 MATCH (d1:Document)
                 MATCH (d2:Document)
-                WHERE d1.file_type = d2.file_type AND id(d1) < id(d2)
+                WHERE d1.file_type = d2.file_type AND elementId(d1) < elementId(d2)
                 CREATE (d1)-[:SHARES_TYPE]->(d2)
                 """)
 
