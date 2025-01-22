@@ -39,16 +39,13 @@ class Neo4jHelper:
         """Flatten metadata to primitive types that Neo4j can store"""
         flattened = {}
         for key, value in metadata.items():
-            if isinstance(value, (str, int, float, bool)):
-                flattened[key] = value
-            elif isinstance(value, list):
-                # Convert list to string representation
-                flattened[key] = json.dumps(value)
-            elif isinstance(value, dict):
-                # Convert nested dict to string representation
+            if isinstance(value, (str, int, float)):
+                flattened[key] = str(value)
+            elif isinstance(value, bool):
+                flattened[key] = str(value).lower()
+            elif isinstance(value, (list, dict)):
                 flattened[key] = json.dumps(value)
             else:
-                # Convert other types to string
                 flattened[key] = str(value)
         return flattened
 
@@ -73,28 +70,29 @@ class Neo4jHelper:
         try:
             # Check if vector index exists
             with self.driver.session(database=self.database) as session:
-                result = session.run("""
-                    SHOW VECTOR INDEXES
+                # First, try to drop the existing index if it exists
+                session.run("""
+                    CALL db.index.vector.drop($index_name)
+                    WITH count(*) as ignored
+                    CALL db.index.vector.list()
                     YIELD name
-                    WHERE name = $index_name
                     RETURN count(*) as count
                 """, index_name=self.index_name)
                 
-                if result.single()["count"] == 0:
-                    # Create vector index using new syntax
-                    session.run("""
-                        CREATE VECTOR INDEX `accounting_docs` IF NOT EXISTS
-                        FOR (n:Document)
-                        ON (n.embedding)
-                        OPTIONS {indexConfig: {
-                            `vector.dimensions`: 4096,
-                            `vector.similarity_function`: 'cosine'
-                        }}
-                    """)
-                    print(f"Created vector index: {self.index_name}")
-                    
-                    # Check for existing documents without embeddings
-                    self._vectorize_existing_documents()
+                # Create vector index using new syntax with correct dimensions
+                session.run("""
+                    CREATE VECTOR INDEX `accounting_docs` IF NOT EXISTS
+                    FOR (n:Document)
+                    ON (n.embedding)
+                    OPTIONS {indexConfig: {
+                        `vector.dimensions`: 8192,
+                        `vector.similarity_function`: 'cosine'
+                    }}
+                """)
+                print(f"Created vector index: {self.index_name}")
+                
+                # Check for existing documents without embeddings
+                self._vectorize_existing_documents()
         except Exception as e:
             print(f"Error initializing vector store: {str(e)}")
 
