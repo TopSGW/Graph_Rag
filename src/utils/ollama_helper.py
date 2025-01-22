@@ -10,9 +10,9 @@ from langchain_core.output_parsers import StrOutputParser
 
 class OllamaHelper:
     def __init__(self):
-        # Initialize Ollama with llama3.3 70b model
+        # Initialize Ollama with llama2 70b model
         self.llm = OllamaLLM(
-            model="llama3.3:70b",
+            model="llama2:70b",
             callbacks=[StreamingStdOutCallbackHandler()],
             temperature=0.1,
             top_k=10,
