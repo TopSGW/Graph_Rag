@@ -77,7 +77,7 @@ class Neo4jHelper:
                     FOR (f:File) REQUIRE f.path IS UNIQUE
                 """)
 
-                # Create indexes
+                # Create indexes for better performance
                 session.run("""
                     CREATE INDEX document_type IF NOT EXISTS
                     FOR (d:Document) ON (d.file_type)
@@ -86,6 +86,16 @@ class Neo4jHelper:
                 session.run("""
                     CREATE INDEX document_created IF NOT EXISTS
                     FOR (d:Document) ON (d.created_at)
+                """)
+
+                session.run("""
+                    CREATE INDEX document_content IF NOT EXISTS
+                    FOR (d:Document) ON (d.text)
+                """)
+
+                session.run("""
+                    CREATE INDEX document_metadata IF NOT EXISTS
+                    FOR (d:Document) ON (d.metadata)
                 """)
         except Exception as e:
             print(f"Error creating constraints and indexes: {str(e)}")
@@ -129,23 +139,23 @@ class Neo4jHelper:
 
     def create_graph_relationships(self):
         """
-        Create relationships between documents based on various criteria:
-        1. Vector similarity using GDS nodeSimilarity
-        2. File type relationships
+        Create relationships between documents using multiple criteria:
+        1. Vector similarity (using GDS nodeSimilarity)
+        2. Content-based relationships
         3. Temporal relationships
-        4. Content-based relationships
+        4. Metadata relationships
+        5. File type relationships
         """
         try:
-            # Check if the GDS plugin is available
             if not self.check_gds_plugin():
-                print("Neo4j Graph Data Science plugin is not available. Please install it first.")
+                print("Neo4j Graph Data Science plugin is not available.")
                 return False
 
             with self.driver.session(database=self.database) as session:
-                # 1) Safely drop existing in-memory graph
+                # Drop existing graph if any
                 self.safe_drop_graph("doc_graph")
 
-                # 2) Project the graph with nodes and their properties
+                # Project graph with all necessary properties
                 project_query = """
                 CALL gds.graph.project(
                     'doc_graph',
@@ -153,66 +163,109 @@ class Neo4jHelper:
                         Document: {
                             properties: {
                                 embedding: {
-                                    property: 'embedding'
+                                    property: 'embedding',
+                                    defaultValue: []
+                                },
+                                text: {
+                                    property: 'text',
+                                    defaultValue: ''
                                 },
                                 file_type: {
-                                    property: 'file_type'
+                                    property: 'file_type',
+                                    defaultValue: ''
                                 },
                                 created_at: {
-                                    property: 'created_at'
+                                    property: 'created_at',
+                                    defaultValue: datetime()
+                                },
+                                metadata: {
+                                    property: 'metadata',
+                                    defaultValue: {}
                                 }
                             }
                         }
                     },
                     {
                         SIMILAR: {
-                            orientation: 'UNDIRECTED'
+                            orientation: 'UNDIRECTED',
+                            properties: {
+                                score: {
+                                    property: 'score',
+                                    defaultValue: 0.0
+                                }
+                            }
                         },
-                        SAME_TYPE: {
+                        SHARES_TYPE: {
                             orientation: 'UNDIRECTED'
                         },
                         TEMPORAL: {
-                            orientation: 'UNDIRECTED'
+                            orientation: 'UNDIRECTED',
+                            properties: {
+                                time_diff: {
+                                    property: 'time_diff',
+                                    defaultValue: 0
+                                }
+                            }
+                        },
+                        RELATED_CONTENT: {
+                            orientation: 'UNDIRECTED',
+                            properties: {
+                                relevance: {
+                                    property: 'relevance',
+                                    defaultValue: 0.0
+                                }
+                            }
                         }
                     }
                 )
                 """
                 session.run(project_query)
 
-                # 3) Create relationships based on vector similarity
-                similarity_query = """
+                # Create vector similarity relationships
+                session.run("""
                 CALL gds.nodeSimilarity.write('doc_graph', {
                     writeRelationshipType: 'SIMILAR',
                     writeProperty: 'score',
-                    similarityMetric: 'COSINE',
+                    similarityMetric: 'cosine',
                     topK: 5,
                     similarityCutoff: 0.7
                 })
-                """
-                session.run(similarity_query)
+                """)
 
-                # 4) Create relationships based on file type
-                file_type_query = """
+                # Create content-based relationships
+                session.run("""
+                MATCH (d1:Document), (d2:Document)
+                WHERE id(d1) < id(d2)
+                WITH d1, d2,
+                     gds.similarity.cosine(
+                         split(d1.text, ' '),
+                         split(d2.text, ' ')
+                     ) AS textSimilarity
+                WHERE textSimilarity > 0.3
+                CREATE (d1)-[:RELATED_CONTENT {relevance: textSimilarity}]->(d2)
+                """)
+
+                # Create temporal relationships
+                session.run("""
+                MATCH (d1:Document), (d2:Document)
+                WHERE id(d1) < id(d2)
+                WITH d1, d2,
+                     duration.between(
+                         datetime(d1.created_at),
+                         datetime(d2.created_at)
+                     ).days AS daysDiff
+                WHERE daysDiff <= 30
+                CREATE (d1)-[:TEMPORAL {time_diff: daysDiff}]->(d2)
+                """)
+
+                # Create file type relationships
+                session.run("""
                 MATCH (d1:Document), (d2:Document)
                 WHERE d1.file_type = d2.file_type AND id(d1) < id(d2)
-                CREATE (d1)-[:SAME_TYPE]->(d2)
-                """
-                session.run(file_type_query)
+                CREATE (d1)-[:SHARES_TYPE]->(d2)
+                """)
 
-                # 5) Create temporal relationships between documents created within the same timeframe
-                temporal_query = """
-                MATCH (d1:Document), (d2:Document)
-                WHERE datetime(d1.created_at) >= datetime(d2.created_at) - duration('P1D')
-                  AND datetime(d1.created_at) <= datetime(d2.created_at) + duration('P1D')
-                  AND id(d1) < id(d2)
-                CREATE (d1)-[:TEMPORAL {timespan: duration.between(
-                    datetime(d1.created_at), 
-                    datetime(d2.created_at)
-                )}]->(d2)
-                """
-                session.run(temporal_query)
-
-                # 6) Clean up the in-memory graph
+                # Clean up
                 self.safe_drop_graph("doc_graph")
 
             return True
@@ -223,43 +276,54 @@ class Neo4jHelper:
 
     def similarity_search_with_graph(self, query: str, k: int = 4) -> List[Dict[str, Any]]:
         """
-        Enhanced similarity search that considers:
-        1. Vector similarity
-        2. File type relationships
-        3. Temporal relationships
-        4. Content-based relationships
+        Enhanced hybrid search combining vector similarity with graph traversal.
+        Uses both vector search and graph relationships for better context.
         """
-        retrieval_query = """
+        hybrid_query = """
+        // First, perform vector similarity search
         WITH $query AS query
         CALL db.index.vector.queryNodes('document_store', $k, query)
         YIELD node, score
-        
+
         // Get directly similar documents
-        OPTIONAL MATCH (node)-[r:SIMILAR]->(similar:Document)
+        OPTIONAL MATCH (node)-[sim:SIMILAR]->(similar:Document)
         
-        // Get documents of the same type
-        OPTIONAL MATCH (node)-[:SAME_TYPE]-(sameType:Document)
-        WHERE sameType <> similar
+        // Get content-related documents
+        OPTIONAL MATCH (node)-[rel:RELATED_CONTENT]->(related:Document)
+        WHERE related <> similar
         
-        // Get temporally related documents
-        OPTIONAL MATCH (node)-[t:TEMPORAL]-(temporal:Document)
-        WHERE temporal <> similar AND temporal <> sameType
+        // Get temporal neighbors
+        OPTIONAL MATCH (node)-[temp:TEMPORAL]->(temporal:Document)
+        WHERE temporal <> similar AND temporal <> related
+        
+        // Get type-related documents
+        OPTIONAL MATCH (node)-[:SHARES_TYPE]->(typeRelated:Document)
+        WHERE typeRelated <> similar AND typeRelated <> related AND typeRelated <> temporal
         
         WITH node, score,
              collect(DISTINCT {
                  text: similar.text,
-                 similarity: r.score,
-                 type: 'similar'
+                 similarity: sim.score,
+                 type: 'vector_similar',
+                 metadata: similar.metadata
              }) AS similar_docs,
              collect(DISTINCT {
-                 text: sameType.text,
-                 type: 'same_type'
-             }) AS same_type_docs,
+                 text: related.text,
+                 relevance: rel.relevance,
+                 type: 'content_related',
+                 metadata: related.metadata
+             }) AS related_docs,
              collect(DISTINCT {
                  text: temporal.text,
-                 timespan: t.timespan,
-                 type: 'temporal'
-             }) AS temporal_docs
+                 time_diff: temp.time_diff,
+                 type: 'temporal',
+                 metadata: temporal.metadata
+             }) AS temporal_docs,
+             collect(DISTINCT {
+                 text: typeRelated.text,
+                 type: 'same_type',
+                 metadata: typeRelated.metadata
+             }) AS type_docs
         
         RETURN node.text AS text,
                score,
@@ -267,8 +331,8 @@ class Neo4jHelper:
                    source: node.source,
                    file_type: node.file_type,
                    created_at: node.created_at,
-                   title: node.title,
-                   related_documents: similar_docs + same_type_docs + temporal_docs
+                   metadata: node.metadata,
+                   related_documents: similar_docs + related_docs + temporal_docs + type_docs
                } AS metadata
         ORDER BY score DESC
         """
@@ -278,7 +342,7 @@ class Neo4jHelper:
             
             with self.driver.session(database=self.database) as session:
                 result = session.run(
-                    retrieval_query,
+                    hybrid_query,
                     query=query_embedding,
                     k=k
                 )
@@ -288,9 +352,7 @@ class Neo4jHelper:
             return []
 
     def add_documents(self, texts: List[str], metadatas: List[Dict[str, Any]] = None):
-        """
-        Add new documents to the vector store and create relationships.
-        """
+        """Add new documents and create relationships."""
         try:
             # Prepare the docs
             documents = []
@@ -304,7 +366,7 @@ class Neo4jHelper:
                 }
                 documents.append(doc)
             
-            # Insert into the Neo4j vector store
+            # Insert into vector store
             self.initialize_vector_store(documents)
             
             # Create relationships

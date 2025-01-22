@@ -1,5 +1,6 @@
 import asyncio
 import os
+import shutil
 from pathlib import Path
 from typing import List, Dict, Any
 from utils.document_loader import DocumentLoader
@@ -9,6 +10,8 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress
+from rich.table import Table
+from datetime import datetime
 
 console = Console()
 
@@ -20,6 +23,7 @@ class RAGSystem:
         self.neo4j_helper = Neo4jHelper()
         self.ollama_helper = OllamaHelper()
         self.vector_store = None
+        self.data_dir = data_dir
         
     async def initialize(self):
         """Initialize the RAG system with documents and vector store"""
@@ -105,6 +109,61 @@ class RAGSystem:
                 "sources": []
             }
 
+    def upload_file(self, file_path: str) -> bool:
+        """Upload a file to the data directory"""
+        try:
+            source_path = Path(file_path)
+            if not source_path.exists():
+                console.print(f"[red]File not found: {file_path}")
+                return False
+
+            # Create destination path
+            dest_path = Path(self.data_dir) / source_path.name
+            
+            # Copy file to data directory
+            shutil.copy2(source_path, dest_path)
+            
+            # Process the new file
+            doc = self.document_loader.read_single_document(dest_path.name)
+            if doc:
+                # Add to vector store
+                self.neo4j_helper.add_documents([doc.page_content], [doc.metadata])
+                console.print(f"[green]Successfully uploaded and processed: {source_path.name}")
+                return True
+            else:
+                console.print(f"[red]Failed to process file: {source_path.name}")
+                return False
+        except Exception as e:
+            console.print(f"[red]Error uploading file: {str(e)}")
+            return False
+
+    def list_files(self, filter_type: str = None) -> None:
+        """List all files with optional type filter"""
+        try:
+            stats = self.document_loader.get_document_stats()
+            
+            # Create table
+            table = Table(title="Document Repository")
+            table.add_column("Filename", style="cyan")
+            table.add_column("Type", style="magenta")
+            table.add_column("Size", style="green")
+            table.add_column("Last Modified", style="yellow")
+            
+            for file_info in stats["files"]:
+                if not filter_type or filter_type.lower() in file_info["content_type"].lower():
+                    table.add_row(
+                        file_info["name"],
+                        file_info["content_type"],
+                        f"{file_info['size'] / 1024:.2f} KB",
+                        datetime.fromisoformat(file_info["last_modified"]).strftime("%Y-%m-%d %H:%M:%S")
+                    )
+            
+            console.print(table)
+            console.print(f"\nTotal Files: {stats['total_files']}")
+            console.print(f"Total Size: {stats['total_size'] / 1024:.2f} KB")
+        except Exception as e:
+            console.print(f"[red]Error listing files: {str(e)}")
+
     def cleanup(self):
         """Cleanup resources"""
         try:
@@ -130,7 +189,7 @@ NEO4J_DATABASE=neo4j
 # Ollama Configuration
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_DEFAULT_MODEL=llama3.3:70b
-OLLAMA_TEMPERATURE=0.7
+OLLAMA_TEMPERATURE=0.1
 OLLAMA_MAX_TOKENS=4096
 
 # Document Processing Configuration
@@ -144,6 +203,46 @@ LOG_FILE=graph_rag.log""")
     
     # Load environment variables
     load_dotenv(dotenv_path=env_path)
+
+def show_help():
+    """Show help message with examples"""
+    help_text = """
+    Commands:
+    1. exit - Exit the system
+    2. help - Show this help message
+    3. upload <file_path> - Upload a new file
+    4. list [type] - List all files or filter by type
+    
+    Example Questions:
+    - File Listing:
+      * "show me all my tax files"
+      * "list documents related to accounting"
+    
+    - Financial Analysis:
+      * "check my net income from 2022"
+      * "calculate my business expenses"
+    
+    - Time-based Queries:
+      * "how much tax have I paid over the years"
+      * "show my expenses for last year"
+    
+    - Person-specific Queries:
+      * "list my daughter Sophia's tax files"
+      * "find documents related to client Sam"
+    
+    - Email/Communication:
+      * "how many emails do I have from client Sam"
+      * "show messages about the investment project"
+    
+    - Image Analysis:
+      * "how many horses are in this image"
+      * "list my pictures from Paris"
+    
+    - Document Search:
+      * "find files under client name Ashley"
+      * "search for documents about investments"
+    """
+    console.print(Panel.fit(help_text, title="Help"))
 
 async def main():
     try:
@@ -168,49 +267,52 @@ async def main():
         console.print(Panel.fit(
             "[green]RAG System Ready!\n" +
             "Type 'exit' to quit\n" +
-            "Type 'help' for commands",
+            "Type 'help' for commands and examples",
             title="System Ready"
         ))
         
         while True:
             try:
-                question = input("\nEnter your question: ").strip()
+                command = input("\nEnter command or question: ").strip()
                 
-                if question.lower() == 'exit':
+                if not command:
+                    continue
+                    
+                parts = command.split(maxsplit=1)
+                cmd = parts[0].lower()
+                
+                if cmd == 'exit':
                     break
-                elif question.lower() == 'help':
+                elif cmd == 'help':
+                    show_help()
+                elif cmd == 'upload' and len(parts) > 1:
+                    rag_system.upload_file(parts[1])
+                elif cmd == 'list':
+                    filter_type = parts[1] if len(parts) > 1 else None
+                    rag_system.list_files(filter_type)
+                else:
+                    # Process as a question
+                    with Progress() as progress:
+                        task = progress.add_task("[cyan]Processing query...", total=1)
+                        result = await rag_system.process_query(command)
+                        progress.update(task, advance=1)
+                    
+                    # Display results
                     console.print(Panel.fit(
-                        "Available commands:\n" +
-                        "exit - Exit the system\n" +
-                        "help - Show this help message\n" +
-                        "Or enter your question about accounting concepts",
-                        title="Help"
+                        result["answer"],
+                        title="Answer"
                     ))
-                    continue
-                elif not question:
-                    continue
-                
-                with Progress() as progress:
-                    task = progress.add_task("[cyan]Processing query...", total=1)
-                    result = await rag_system.process_query(question)
-                    progress.update(task, advance=1)
-                
-                # Display results
-                console.print(Panel.fit(
-                    result["answer"],
-                    title="Answer"
-                ))
-                
-                if result["sources"]:
-                    console.print(Panel.fit(
-                        "\n".join([
-                            f"[cyan]Source: {s['title']}\n" +
-                            "[dim]Related documents:[/dim]\n" +
-                            "\n".join([f"- {r}" for r in s["related_docs"]])
-                            for s in result["sources"]
-                        ]),
-                        title="Sources"
-                    ))
+                    
+                    if result["sources"]:
+                        console.print(Panel.fit(
+                            "\n".join([
+                                f"[cyan]Source: {s['title']}\n" +
+                                "[dim]Related documents:[/dim]\n" +
+                                "\n".join([f"- {r}" for r in s["related_docs"]])
+                                for s in result["sources"]
+                            ]),
+                            title="Sources"
+                        ))
             
             except KeyboardInterrupt:
                 break
