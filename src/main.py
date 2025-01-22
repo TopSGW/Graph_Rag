@@ -23,10 +23,127 @@ class RAGSystem:
         self.document_loader = DocumentLoader(directory_path=data_dir)
         self.neo4j_helper = Neo4jHelper()
         self.ollama_helper = OllamaHelper()
-        self.vector_store = None
         self.data_dir = data_dir
 
-    # CRUD Operations
+    async def initialize(self):
+        """Initialize the RAG system with documents and vector store"""
+        try:
+            with Progress() as progress:
+                # First check if GDS plugin is available
+                task1 = progress.add_task("[cyan]Checking Neo4j GDS plugin...", total=1)
+                if not self.neo4j_helper.check_gds_plugin():
+                    console.print("[red]Neo4j Graph Data Science plugin is not available.")
+                    console.print("[yellow]Please install the GDS plugin in your Neo4j database.")
+                    console.print("[yellow]Visit: https://neo4j.com/docs/graph-data-science/current/installation/")
+                    return False
+                progress.update(task1, advance=1)
+
+                # Load and process documents
+                task2 = progress.add_task("[cyan]Loading documents...", total=1)
+                documents = self.document_loader.load_documents()
+                if not documents:
+                    console.print("[red]No documents found to process")
+                    return False
+                progress.update(task2, advance=1)
+
+                # Add documents to Neo4j
+                task3 = progress.add_task("[cyan]Adding documents to Neo4j...", total=1)
+                texts = [doc.page_content for doc in documents]
+                metadatas = [doc.metadata for doc in documents]
+                success = self.neo4j_helper.bulk_create_documents(texts, metadatas)
+                if not success:
+                    console.print("[red]Failed to add documents to Neo4j")
+                    return False
+                progress.update(task3, advance=1)
+
+            console.print(Panel.fit(
+                "[green]RAG system initialized successfully\n" +
+                f"Loaded {len(documents)} document chunks\n" +
+                "Documents added to Neo4j with embeddings and relationships",
+                title="Initialization Complete"
+            ))
+            return True
+        except Exception as e:
+            console.print(f"[red]Error initializing RAG system: {str(e)}")
+            return False
+
+    def _format_relationships(self, relationships: Dict[str, List[Dict[str, Any]]]) -> Tree:
+        """Format relationships into a tree structure"""
+        tree = Tree("📄 Related Documents")
+        
+        if relationships.get("similar"):
+            similar_branch = tree.add("🎯 Similar Documents")
+            for doc in relationships["similar"]:
+                similar_branch.add(f"[cyan]{doc['text'][:100]}... (Score: {doc.get('similarity', 0):.3f})")
+        
+        if relationships.get("content"):
+            content_branch = tree.add("📝 Content Related")
+            for doc in relationships["content"]:
+                content_branch.add(f"[green]{doc['text'][:100]}... (Relevance: {doc.get('relevance', 0):.3f})")
+        
+        if relationships.get("temporal"):
+            temporal_branch = tree.add("⏰ Temporal Neighbors")
+            for doc in relationships["temporal"]:
+                time_diff = doc.get('time_diff', 0)
+                temporal_branch.add(f"[yellow]{doc['text'][:100]}... ({time_diff} days)")
+        
+        if relationships.get("type"):
+            type_branch = tree.add("📁 Same Type")
+            for doc in relationships["type"]:
+                type_branch.add(f"[magenta]{doc['text'][:100]}...")
+        
+        return tree
+
+    async def process_query(self, question: str) -> Dict[str, Any]:
+        """Process a query and return response with context"""
+        try:
+            # Get relevant documents with graph context
+            results = self.neo4j_helper.similarity_search_with_graph(question)
+            
+            if not results:
+                return {
+                    "answer": "I couldn't find relevant information to answer your question.",
+                    "context": [],
+                    "sources": []
+                }
+            
+            # Format context with relationships
+            context = []
+            sources = []
+            
+            for result in results:
+                # Add main document text
+                context.append(result["text"])
+                
+                # Format source information
+                source_info = {
+                    "title": result["metadata"].get("source", "").split("/")[-1],
+                    "score": result["score"],
+                    "relationships": None
+                }
+                
+                # Add relationship information if available
+                if "relationships" in result:
+                    source_info["relationships"] = result["relationships"]
+                
+                sources.append(source_info)
+            
+            # Get response from LLM with enhanced context
+            response = await self.ollama_helper.get_rag_response(question, results)
+            
+            return {
+                "answer": response,
+                "context": context,
+                "sources": sources
+            }
+        except Exception as e:
+            console.print(f"[red]Error processing query: {str(e)}")
+            return {
+                "answer": "An error occurred while processing your query.",
+                "context": [],
+                "sources": []
+            }
+
     def create_document(self, text: str, metadata: Dict[str, Any] = None) -> str:
         """Create a new document"""
         try:
@@ -113,118 +230,6 @@ class RAGSystem:
             console.print(table)
         except Exception as e:
             console.print(f"[red]Error listing documents: {str(e)}")
-        
-    async def initialize(self):
-        """Initialize the RAG system with documents and vector store"""
-        try:
-            with Progress() as progress:
-                task1 = progress.add_task("[cyan]Loading documents...", total=1)
-                # Load documents
-                documents = self.document_loader.load_documents()
-                if not documents:
-                    console.print("[red]No documents found to process")
-                    return False
-                progress.update(task1, advance=1)
-
-                task2 = progress.add_task("[cyan]Initializing vector store...", total=1)
-                # Initialize Neo4j vector store with documents
-                self.vector_store = self.neo4j_helper.initialize_vector_store(documents)
-                progress.update(task2, advance=1)
-
-                task3 = progress.add_task("[cyan]Creating graph relationships...", total=1)
-                # Create graph relationships
-                success = self.neo4j_helper.create_graph_relationships()
-                if not success:
-                    console.print("[red]Failed to create graph relationships")
-                    return False
-                progress.update(task3, advance=1)
-
-            console.print(Panel.fit(
-                "[green]RAG system initialized successfully\n" +
-                f"Loaded {len(documents)} document chunks\n" +
-                "Vector store and graph relationships created",
-                title="Initialization Complete"
-            ))
-            return True
-        except Exception as e:
-            console.print(f"[red]Error initializing RAG system: {str(e)}")
-            return False
-
-    def _format_relationships(self, relationships: Dict[str, List[Dict[str, Any]]]) -> Tree:
-        """Format relationships into a tree structure"""
-        tree = Tree("📄 Related Documents")
-        
-        if relationships.get("similar"):
-            similar_branch = tree.add("🎯 Similar Documents")
-            for doc in relationships["similar"]:
-                similar_branch.add(f"[cyan]{doc['text'][:100]}...")
-        
-        if relationships.get("content"):
-            content_branch = tree.add("📝 Content Related")
-            for doc in relationships["content"]:
-                content_branch.add(f"[green]{doc['text'][:100]}...")
-        
-        if relationships.get("temporal"):
-            temporal_branch = tree.add("⏰ Temporal Neighbors")
-            for doc in relationships["temporal"]:
-                temporal_branch.add(f"[yellow]{doc['text'][:100]}...")
-        
-        if relationships.get("type"):
-            type_branch = tree.add("📁 Same Type")
-            for doc in relationships["type"]:
-                type_branch.add(f"[magenta]{doc['text'][:100]}...")
-        
-        return tree
-
-    async def process_query(self, question: str) -> Dict[str, Any]:
-        """Process a query and return response with context"""
-        try:
-            # Get relevant documents with graph context
-            results = self.neo4j_helper.similarity_search_with_graph(question)
-            
-            if not results:
-                return {
-                    "answer": "I couldn't find relevant information to answer your question.",
-                    "context": [],
-                    "sources": []
-                }
-            
-            # Format context with relationships
-            context = []
-            sources = []
-            
-            for result in results:
-                # Add main document text
-                context.append(result["text"])
-                
-                # Format source information
-                source_info = {
-                    "title": result["metadata"].get("source", "").split("/")[-1],
-                    "score": result["score"],
-                    "relationships": None
-                }
-                
-                # Add relationship information if available
-                if "relationships" in result:
-                    source_info["relationships"] = result["relationships"]
-                
-                sources.append(source_info)
-            
-            # Get response from LLM with enhanced context
-            response = await self.ollama_helper.get_rag_response(question, results)
-            
-            return {
-                "answer": response,
-                "context": context,
-                "sources": sources
-            }
-        except Exception as e:
-            console.print(f"[red]Error processing query: {str(e)}")
-            return {
-                "answer": "An error occurred while processing your query.",
-                "context": [],
-                "sources": []
-            }
 
     def upload_file(self, file_path: str) -> bool:
         """Upload a file to the data directory"""
@@ -244,9 +249,13 @@ class RAGSystem:
             doc = self.document_loader.read_single_document(dest_path.name)
             if doc:
                 # Add to vector store
-                self.neo4j_helper.add_documents([doc.page_content], [doc.metadata])
-                console.print(f"[green]Successfully uploaded and processed: {source_path.name}")
-                return True
+                success = self.neo4j_helper.add_documents([doc.page_content], [doc.metadata])
+                if success:
+                    console.print(f"[green]Successfully uploaded and processed: {source_path.name}")
+                    return True
+                else:
+                    console.print(f"[red]Failed to add document to vector store: {source_path.name}")
+                    return False
             else:
                 console.print(f"[red]Failed to process file: {source_path.name}")
                 return False

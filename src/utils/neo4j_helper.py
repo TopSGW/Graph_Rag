@@ -34,6 +34,23 @@ class Neo4jHelper:
         
         # Initialize vector store and cache
         self._init_vector_store()
+        
+    def check_gds_plugin(self) -> bool:
+        """Check if the Graph Data Science plugin is installed and available."""
+        try:
+            with self.driver.session(database=self.database) as session:
+                # Try to call a GDS function to verify plugin is installed and working
+                result = session.run("CALL gds.version() YIELD version")
+                version = result.single()["version"]
+                print(f"Neo4j Graph Data Science plugin version: {version}")
+                return True
+        except Exception as e:
+            if "not found" in str(e).lower():
+                print("Neo4j Graph Data Science plugin is not installed.")
+                print("Please install it from: https://neo4j.com/docs/graph-data-science/current/installation/")
+            else:
+                print(f"Error checking GDS plugin: {str(e)}")
+            return False
 
     def _init_vector_store(self):
         """Initialize vector store and handle initial vectorization"""
@@ -216,6 +233,100 @@ class Neo4jHelper:
         except Exception as e:
             print(f"Error in hybrid search: {str(e)}")
             return []
+
+    def create_graph_relationships(self):
+        """Create relationships between documents using multiple criteria"""
+        try:
+            if not self.check_gds_plugin():
+                print("Neo4j Graph Data Science plugin is not available.")
+                return False
+
+            with self.driver.session(database=self.database) as session:
+                # First create the relationships in the database
+                # 1. Create vector similarity relationships using elementId()
+                session.run("""
+                MATCH (d1:Document)
+                MATCH (d2:Document)
+                WHERE elementId(d1) < elementId(d2)
+                WITH d1, d2, gds.similarity.cosine(d1.embedding, d2.embedding) AS similarity
+                WHERE similarity > 0.7
+                CREATE (d1)-[:SIMILAR {score: similarity}]->(d2)
+                """)
+
+                # 2. Create content-based relationships using embeddings
+                session.run("""
+                MATCH (d1:Document)
+                MATCH (d2:Document)
+                WHERE elementId(d1) < elementId(d2)
+                WITH d1, d2,
+                    gds.similarity.cosine(d1.embedding, d2.embedding) AS contentSimilarity
+                WHERE contentSimilarity > 0.3
+                CREATE (d1)-[:RELATED_CONTENT {relevance: contentSimilarity}]->(d2)
+                """)
+
+                # 3. Create temporal relationships with proper null handling
+                session.run("""
+                MATCH (d1:Document)
+                MATCH (d2:Document)
+                WHERE elementId(d1) < elementId(d2)
+                AND d1.metadata.created_at IS NOT NULL 
+                AND d2.metadata.created_at IS NOT NULL
+                WITH d1, d2,
+                    CASE
+                        WHEN d1.metadata.created_at IS NOT NULL 
+                            AND d2.metadata.created_at IS NOT NULL
+                        THEN abs(toInteger(d1.metadata.created_at) - toInteger(d2.metadata.created_at)) / 86400
+                        ELSE 999999
+                    END AS daysDiff
+                WHERE daysDiff <= 30
+                CREATE (d1)-[:TEMPORAL {time_diff: daysDiff}]->(d2)
+                """)
+
+                # 4. Create file type relationships
+                session.run("""
+                MATCH (d1:Document)
+                MATCH (d2:Document)
+                WHERE d1.file_type = d2.file_type AND elementId(d1) < elementId(d2)
+                CREATE (d1)-[:SHARES_TYPE]->(d2)
+                """)
+
+                # Now project the graph with the created relationships
+                project_query = """
+                CALL gds.graph.project(
+                    'doc_graph',
+                    'Document',
+                    {
+                        SIMILAR: {
+                            orientation: 'UNDIRECTED',
+                            properties: ['score']
+                        },
+                        RELATED_CONTENT: {
+                            orientation: 'UNDIRECTED',
+                            properties: ['relevance']
+                        },
+                        TEMPORAL: {
+                            orientation: 'UNDIRECTED',
+                            properties: ['time_diff']
+                        },
+                        SHARES_TYPE: {
+                            orientation: 'UNDIRECTED'
+                        }
+                    },
+                    {
+                        nodeProperties: ['embedding', 'text', 'file_type', 'metadata']
+                    }
+                )
+                """
+                session.run(project_query)
+
+                # Clean up the projected graph
+                self.safe_drop_graph("doc_graph")
+
+            return True
+        except Exception as e:
+            print(f"Error creating relationships: {str(e)}")
+            self.safe_drop_graph("doc_graph")
+            return False
 
     # CRUD Operations
     def create_document(self, text: str, metadata: Dict[str, Any] = None) -> str:
