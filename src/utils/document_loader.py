@@ -3,7 +3,7 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
-import magic  # for file type detection
+import mimetypes  # Built-in Python module for file type detection
 from PIL import Image
 import pytesseract
 import PyPDF2
@@ -28,15 +28,17 @@ class DocumentLoader:
             '.jpeg': self._process_image_file,
             '.png': self._process_image_file,
         }
+        # Initialize mimetypes
+        mimetypes.init()
 
     def _get_file_type(self, file_path: Path) -> str:
-        """Detect file type using python-magic"""
+        """Detect file type using mimetypes"""
         try:
-            mime = magic.from_file(str(file_path), mime=True)
-            return mime
+            mime_type, _ = mimetypes.guess_type(str(file_path))
+            return mime_type or "application/octet-stream"
         except Exception as e:
             print(f"Error detecting file type: {str(e)}")
-            return None
+            return "application/octet-stream"
 
     def _calculate_file_hash(self, file_path: Path) -> str:
         """Calculate SHA-256 hash of file content"""
