@@ -9,6 +9,8 @@ import time
 import uuid
 import json
 import hashlib
+import numpy as np
+from sklearn.decomposition import PCA
 
 # Load environment variables
 env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
@@ -22,6 +24,7 @@ class Neo4jHelper:
         self.database = os.getenv("NEO4J_DATABASE", "neo4j")
         self.index_name = "accounting_docs"
         self.vector_cache_path = "vector_cache.json"
+        self.target_dimensions = 4096  # Neo4j's maximum supported dimensions
         
         # Initialize Ollama embeddings
         self.embeddings = OllamaEmbeddings(
@@ -32,8 +35,28 @@ class Neo4jHelper:
         # Initialize Neo4j driver
         self.driver = GraphDatabase.driver(self.url, auth=(self.username, self.password))
         
+        # Initialize PCA for dimensionality reduction
+        self.pca = None
+        
         # Initialize vector store and cache
         self._init_vector_store()
+
+    def _reduce_dimensions(self, embedding: List[float]) -> List[float]:
+        """Reduce embedding dimensions to match Neo4j's maximum"""
+        if len(embedding) <= self.target_dimensions:
+            return embedding
+            
+        # Convert to numpy array
+        embedding_array = np.array(embedding).reshape(1, -1)
+        
+        # Initialize PCA if not already done
+        if self.pca is None:
+            self.pca = PCA(n_components=self.target_dimensions)
+            reduced = self.pca.fit_transform(embedding_array)
+        else:
+            reduced = self.pca.transform(embedding_array)
+        
+        return reduced[0].tolist()
 
     def _flatten_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """Flatten metadata to primitive types that Neo4j can store"""
@@ -81,7 +104,7 @@ class Neo4jHelper:
                     FOR (n:Document)
                     ON (n.embedding)
                     OPTIONS {indexConfig: {
-                        `vector.dimensions`: 8192,
+                        `vector.dimensions`: 4096,
                         `vector.similarity_function`: 'cosine'
                     }}
                 """)
@@ -108,11 +131,14 @@ class Neo4jHelper:
                 if documents:
                     print(f"Vectorizing {len(documents)} documents...")
                     for doc_id, text in documents:
+                        # Get embedding and reduce dimensions
                         embedding = self.embeddings.embed_query(text)
+                        reduced_embedding = self._reduce_dimensions(embedding)
+                        
                         session.run("""
                             MATCH (d:Document {id: $id})
                             SET d.embedding = $embedding
-                        """, id=doc_id, embedding=embedding)
+                        """, id=doc_id, embedding=reduced_embedding)
                     print("Vectorization complete")
         except Exception as e:
             print(f"Error vectorizing documents: {str(e)}")
@@ -121,7 +147,9 @@ class Neo4jHelper:
         """Create a single document with vector embedding"""
         try:
             doc_id = str(uuid.uuid4())
+            # Get embedding and reduce dimensions
             embedding = self.embeddings.embed_query(text)
+            reduced_embedding = self._reduce_dimensions(embedding)
             
             if metadata is None:
                 metadata = {}
@@ -147,34 +175,12 @@ class Neo4jHelper:
                 """, {
                     "id": doc_id,
                     "text": text,
-                    "embedding": embedding,
+                    "embedding": reduced_embedding,
                     "metadata": flattened_metadata
                 })
                 return result.single()["id"]
         except Exception as e:
             print(f"Error creating document: {str(e)}")
-            return None
-
-    def read_document(self, doc_id: str) -> Optional[Dict[str, Any]]:
-        """Read a document by ID"""
-        try:
-            with self.driver.session(database=self.database) as session:
-                result = session.run("""
-                    MATCH (d:Document {id: $id})
-                    RETURN d
-                """, {"id": doc_id})
-                record = result.single()
-                if record:
-                    node = record["d"]
-                    return {
-                        "id": node["id"],
-                        "text": node["text"],
-                        "metadata": {k: v for k, v in node.items() 
-                                  if k not in ["id", "text", "embedding"]}
-                    }
-                return None
-        except Exception as e:
-            print(f"Error reading document: {str(e)}")
             return None
 
     def update_document(self, doc_id: str, text: str = None, metadata: Dict[str, Any] = None) -> bool:
@@ -184,14 +190,16 @@ class Neo4jHelper:
             params = {"id": doc_id}
             
             if text is not None:
+                # Get embedding and reduce dimensions
                 embedding = self.embeddings.embed_query(text)
+                reduced_embedding = self._reduce_dimensions(embedding)
                 updates.extend([
                     "d.text = $text",
                     "d.embedding = $embedding"
                 ])
                 params.update({
                     "text": text,
-                    "embedding": embedding
+                    "embedding": reduced_embedding
                 })
             
             if metadata is not None:
@@ -214,6 +222,95 @@ class Neo4jHelper:
         except Exception as e:
             print(f"Error updating document: {str(e)}")
             return False
+
+    def similarity_search_with_graph(self, query: str, k: int = 4) -> List[Dict[str, Any]]:
+        """Hybrid search combining vector similarity with graph traversal"""
+        try:
+            # Get embedding and reduce dimensions
+            query_embedding = self.embeddings.embed_query(query)
+            reduced_query_embedding = self._reduce_dimensions(query_embedding)
+            
+            with self.driver.session(database=self.database) as session:
+                result = session.run("""
+                    CALL db.index.vector.queryNodes($index_name, $k, $embedding)
+                    YIELD node, score
+                    WITH node, score
+                    
+                    OPTIONAL MATCH (node)-[sim:SIMILAR]->(similar:Document)
+                    OPTIONAL MATCH (node)-[rel:RELATED_CONTENT]->(related:Document)
+                    OPTIONAL MATCH (node)-[temp:TEMPORAL]->(temporal:Document)
+                    OPTIONAL MATCH (node)-[:SHARES_TYPE]->(typeRelated:Document)
+                    
+                    RETURN 
+                        node.text AS text,
+                        score AS vector_score,
+                        node {.*, embedding: null} AS metadata,
+                        collect(DISTINCT {
+                            text: similar.text,
+                            score: sim.score,
+                            type: 'similar'
+                        }) AS similar_docs,
+                        collect(DISTINCT {
+                            text: related.text,
+                            relevance: rel.relevance,
+                            type: 'content'
+                        }) AS related_docs,
+                        collect(DISTINCT {
+                            text: temporal.text,
+                            time_diff: temp.time_diff,
+                            type: 'temporal'
+                        }) AS temporal_docs,
+                        collect(DISTINCT {
+                            text: typeRelated.text,
+                            type: 'same_type'
+                        }) AS type_docs
+                """, {
+                    "index_name": self.index_name,
+                    "embedding": reduced_query_embedding,
+                    "k": k
+                })
+                
+                documents = []
+                for record in result:
+                    doc = {
+                        "text": record["text"],
+                        "score": record["vector_score"],
+                        "metadata": record["metadata"],
+                        "relationships": {
+                            "similar": [d for d in record["similar_docs"] if d["text"]],
+                            "content": [d for d in record["related_docs"] if d["text"]],
+                            "temporal": [d for d in record["temporal_docs"] if d["text"]],
+                            "type": [d for d in record["type_docs"] if d["text"]]
+                        }
+                    }
+                    documents.append(doc)
+                
+                return documents
+        except Exception as e:
+            print(f"Error in hybrid search: {str(e)}")
+            return []
+
+    def read_document(self, doc_id: str) -> Optional[Dict[str, Any]]:
+        """Read a document by ID"""
+        try:
+            with self.driver.session(database=self.database) as session:
+                result = session.run("""
+                    MATCH (d:Document {id: $id})
+                    RETURN d
+                """, {"id": doc_id})
+                record = result.single()
+                if record:
+                    node = record["d"]
+                    return {
+                        "id": node["id"],
+                        "text": node["text"],
+                        "metadata": {k: v for k, v in node.items() 
+                                  if k not in ["id", "text", "embedding"]}
+                    }
+                return None
+        except Exception as e:
+            print(f"Error reading document: {str(e)}")
+            return None
 
     def delete_document(self, doc_id: str) -> bool:
         """Delete a document and its relationships"""
@@ -308,71 +405,6 @@ class Neo4jHelper:
         except Exception as e:
             print(f"Error creating relationships: {str(e)}")
             return False
-
-    def similarity_search_with_graph(self, query: str, k: int = 4) -> List[Dict[str, Any]]:
-        """Hybrid search combining vector similarity with graph traversal"""
-        try:
-            query_embedding = self.embeddings.embed_query(query)
-            
-            with self.driver.session(database=self.database) as session:
-                result = session.run("""
-                    CALL db.index.vector.queryNodes($index_name, $k, $embedding)
-                    YIELD node, score
-                    WITH node, score
-                    
-                    OPTIONAL MATCH (node)-[sim:SIMILAR]->(similar:Document)
-                    OPTIONAL MATCH (node)-[rel:RELATED_CONTENT]->(related:Document)
-                    OPTIONAL MATCH (node)-[temp:TEMPORAL]->(temporal:Document)
-                    OPTIONAL MATCH (node)-[:SHARES_TYPE]->(typeRelated:Document)
-                    
-                    RETURN 
-                        node.text AS text,
-                        score AS vector_score,
-                        node {.*, embedding: null} AS metadata,
-                        collect(DISTINCT {
-                            text: similar.text,
-                            score: sim.score,
-                            type: 'similar'
-                        }) AS similar_docs,
-                        collect(DISTINCT {
-                            text: related.text,
-                            relevance: rel.relevance,
-                            type: 'content'
-                        }) AS related_docs,
-                        collect(DISTINCT {
-                            text: temporal.text,
-                            time_diff: temp.time_diff,
-                            type: 'temporal'
-                        }) AS temporal_docs,
-                        collect(DISTINCT {
-                            text: typeRelated.text,
-                            type: 'same_type'
-                        }) AS type_docs
-                """, {
-                    "index_name": self.index_name,
-                    "embedding": query_embedding,
-                    "k": k
-                })
-                
-                documents = []
-                for record in result:
-                    doc = {
-                        "text": record["text"],
-                        "score": record["vector_score"],
-                        "metadata": record["metadata"],
-                        "relationships": {
-                            "similar": [d for d in record["similar_docs"] if d["text"]],
-                            "content": [d for d in record["related_docs"] if d["text"]],
-                            "temporal": [d for d in record["temporal_docs"] if d["text"]],
-                            "type": [d for d in record["type_docs"] if d["text"]]
-                        }
-                    }
-                    documents.append(doc)
-                
-                return documents
-        except Exception as e:
-            print(f"Error in hybrid search: {str(e)}")
-            return []
 
     def get_document_count(self) -> int:
         """Get total number of documents"""
