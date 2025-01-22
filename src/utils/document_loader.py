@@ -3,7 +3,7 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
-import mimetypes  # Built-in Python module for file type detection
+import mimetypes
 from PIL import Image
 import pytesseract
 import PyPDF2
@@ -58,16 +58,17 @@ class DocumentLoader:
         metadata = {
             "source": str(file_path),
             "filename": file_path.name,
-            "title": file_path.stem.replace('_', ' '),
+            "title": file_path.stem,  # Removed replace('_', ' ') for consistency
             "file_type": content_type,
             "file_extension": file_path.suffix,
-            "file_size": stats.st_size,
-            "created_at": datetime.fromtimestamp(stats.st_ctime).isoformat(),
-            "modified_at": datetime.fromtimestamp(stats.st_mtime).isoformat(),
+            "file_size": int(stats.st_size),  # Ensure integer type
+            "created_at": str(int(datetime.fromtimestamp(stats.st_ctime).timestamp())),  # Store as Unix timestamp string
+            "modified_at": str(int(datetime.fromtimestamp(stats.st_mtime).timestamp())),  # Store as Unix timestamp string
             "file_hash": self._calculate_file_hash(file_path),
             "content_type": content_type,
-            "path_components": file_path.parts,
             "is_hidden": file_path.name.startswith('.'),
+            # Convert path components to string for Neo4j compatibility
+            "path_components": str(list(file_path.parts))
         }
         return metadata
 
@@ -140,8 +141,8 @@ class DocumentLoader:
                         for i, text in enumerate(texts):
                             chunk_metadata = metadata.copy()
                             chunk_metadata.update({
-                                "chunk_index": i,
-                                "chunk_total": len(texts)
+                                "chunk_index": str(i),  # Convert to string for Neo4j
+                                "chunk_total": str(len(texts))  # Convert to string for Neo4j
                             })
                             
                             doc = Document(
@@ -174,9 +175,9 @@ class DocumentLoader:
                     
                     file_info = {
                         "name": file_path.name,
-                        "size": size,
+                        "size": str(size),  # Convert to string for Neo4j
                         "content_type": content_type,
-                        "last_modified": datetime.fromtimestamp(file_path.stat().st_mtime).isoformat(),
+                        "last_modified": str(int(datetime.fromtimestamp(file_path.stat().st_mtime).timestamp())),
                         "file_hash": self._calculate_file_hash(file_path)
                     }
                     files.append(file_info)
@@ -184,24 +185,24 @@ class DocumentLoader:
                     
                     # Track file types
                     if content_type in file_types:
-                        file_types[content_type] += 1
+                        file_types[content_type] = str(int(file_types[content_type]) + 1)
                     else:
-                        file_types[content_type] = 1
+                        file_types[content_type] = "1"
             
             stats = {
-                "total_files": len(files),
-                "total_size": total_size,
-                "file_types": file_types,
-                "files": files
+                "total_files": str(len(files)),  # Convert to string for Neo4j
+                "total_size": str(total_size),  # Convert to string for Neo4j
+                "file_types": json.dumps(file_types),  # Convert dict to JSON string for Neo4j
+                "files": json.dumps(files)  # Convert list to JSON string for Neo4j
             }
             return stats
         except Exception as e:
             print(f"Error getting document stats: {str(e)}")
             return {
-                "total_files": 0,
-                "total_size": 0,
-                "file_types": {},
-                "files": []
+                "total_files": "0",
+                "total_size": "0",
+                "file_types": "{}",
+                "files": "[]"
             }
 
     def read_single_document(self, filename: str) -> Optional[Document]:
@@ -241,7 +242,7 @@ class DocumentLoader:
             titles = []
             for file_path in path.glob("*.*"):
                 if file_path.is_file() and file_path.suffix.lower() in self.supported_types:
-                    titles.append(file_path.stem.replace('_', ' '))
+                    titles.append(file_path.stem)
             return titles
         except Exception as e:
             print(f"Error getting document titles: {str(e)}")

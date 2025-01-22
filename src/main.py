@@ -13,6 +13,7 @@ from rich.progress import Progress
 from rich.table import Table
 from rich.tree import Tree
 from datetime import datetime
+import json
 
 console = Console()
 
@@ -48,17 +49,42 @@ class RAGSystem:
 
                 # Add documents to Neo4j
                 task3 = progress.add_task("[cyan]Adding documents to Neo4j...", total=1)
-                texts = [doc.page_content for doc in documents]
-                metadatas = [doc.metadata for doc in documents]
-                success = self.neo4j_helper.bulk_create_documents(texts, metadatas)
-                if not success:
+                doc_count = len(documents)
+                success_count = 0
+
+                for doc in documents:
+                    # Ensure metadata is properly formatted for Neo4j
+                    metadata = {}
+                    for key, value in doc.metadata.items():
+                        if isinstance(value, (int, float)):
+                            metadata[key] = str(value)
+                        elif isinstance(value, bool):
+                            metadata[key] = str(value).lower()
+                        elif isinstance(value, (list, dict)):
+                            metadata[key] = json.dumps(value)
+                        else:
+                            metadata[key] = str(value)
+
+                    # Create document in Neo4j
+                    doc_id = self.neo4j_helper.create_document(
+                        text=doc.page_content,
+                        metadata=metadata
+                    )
+                    if doc_id:
+                        success_count += 1
+
+                if success_count > 0:
+                    # Create relationships between documents
+                    self.neo4j_helper.create_graph_relationships()
+                    progress.update(task3, advance=1)
+                else:
                     console.print("[red]Failed to add documents to Neo4j")
                     return False
-                progress.update(task3, advance=1)
 
             console.print(Panel.fit(
                 "[green]RAG system initialized successfully\n" +
-                f"Loaded {len(documents)} document chunks\n" +
+                f"Loaded {doc_count} document chunks\n" +
+                f"Successfully processed {success_count} documents\n" +
                 "Documents added to Neo4j with embeddings and relationships",
                 title="Initialization Complete"
             ))
@@ -147,7 +173,22 @@ class RAGSystem:
     def create_document(self, text: str, metadata: Dict[str, Any] = None) -> str:
         """Create a new document"""
         try:
-            doc_id = self.neo4j_helper.create_document(text, metadata)
+            # Ensure metadata is properly formatted for Neo4j
+            if metadata:
+                formatted_metadata = {}
+                for key, value in metadata.items():
+                    if isinstance(value, (int, float)):
+                        formatted_metadata[key] = str(value)
+                    elif isinstance(value, bool):
+                        formatted_metadata[key] = str(value).lower()
+                    elif isinstance(value, (list, dict)):
+                        formatted_metadata[key] = json.dumps(value)
+                    else:
+                        formatted_metadata[key] = str(value)
+            else:
+                formatted_metadata = None
+
+            doc_id = self.neo4j_helper.create_document(text, formatted_metadata)
             if doc_id:
                 console.print(f"[green]Document created successfully. ID: {doc_id}")
                 return doc_id
@@ -163,9 +204,21 @@ class RAGSystem:
         try:
             doc = self.neo4j_helper.read_document(doc_id)
             if doc:
+                # Format metadata for display
+                formatted_metadata = {}
+                for key, value in doc["metadata"].items():
+                    try:
+                        # Try to parse JSON strings back to Python objects
+                        if isinstance(value, str) and (value.startswith('{') or value.startswith('[')):
+                            formatted_metadata[key] = json.loads(value)
+                        else:
+                            formatted_metadata[key] = value
+                    except json.JSONDecodeError:
+                        formatted_metadata[key] = value
+
                 console.print(Panel.fit(
                     f"[cyan]Text:[/]\n{doc['text']}\n\n" +
-                    f"[cyan]Metadata:[/]\n{doc['metadata']}",
+                    f"[cyan]Metadata:[/]\n{formatted_metadata}",
                     title=f"Document {doc_id}"
                 ))
             else:
@@ -176,7 +229,22 @@ class RAGSystem:
     def update_document(self, doc_id: str, text: str = None, metadata: Dict[str, Any] = None) -> bool:
         """Update a document"""
         try:
-            success = self.neo4j_helper.update_document(doc_id, text, metadata)
+            # Format metadata if provided
+            if metadata:
+                formatted_metadata = {}
+                for key, value in metadata.items():
+                    if isinstance(value, (int, float)):
+                        formatted_metadata[key] = str(value)
+                    elif isinstance(value, bool):
+                        formatted_metadata[key] = str(value).lower()
+                    elif isinstance(value, (list, dict)):
+                        formatted_metadata[key] = json.dumps(value)
+                    else:
+                        formatted_metadata[key] = str(value)
+            else:
+                formatted_metadata = None
+
+            success = self.neo4j_helper.update_document(doc_id, text, formatted_metadata)
             if success:
                 console.print(f"[green]Document {doc_id} updated successfully")
             else:
@@ -203,6 +271,14 @@ class RAGSystem:
         """List documents with optional metadata filter"""
         try:
             if metadata_key and metadata_value:
+                # Convert metadata value to string for Neo4j
+                if isinstance(metadata_value, (int, float)):
+                    metadata_value = str(metadata_value)
+                elif isinstance(metadata_value, bool):
+                    metadata_value = str(metadata_value).lower()
+                elif isinstance(metadata_value, (list, dict)):
+                    metadata_value = json.dumps(metadata_value)
+
                 docs = self.neo4j_helper.get_documents_by_metadata(metadata_key, metadata_value)
             else:
                 docs = self.neo4j_helper.get_documents_by_metadata("id", "*")
@@ -218,7 +294,7 @@ class RAGSystem:
             
             for doc in docs:
                 created_at = datetime.fromtimestamp(
-                    float(doc["metadata"].get("created_at", 0))
+                    float(doc["metadata"].get("created_at", "0"))
                 ).strftime("%Y-%m-%d %H:%M:%S")
                 
                 table.add_row(
@@ -248,13 +324,25 @@ class RAGSystem:
             # Process the new file
             doc = self.document_loader.read_single_document(dest_path.name)
             if doc:
-                # Add to vector store
-                success = self.neo4j_helper.add_documents([doc.page_content], [doc.metadata])
-                if success:
+                # Format metadata for Neo4j
+                formatted_metadata = {}
+                for key, value in doc.metadata.items():
+                    if isinstance(value, (int, float)):
+                        formatted_metadata[key] = str(value)
+                    elif isinstance(value, bool):
+                        formatted_metadata[key] = str(value).lower()
+                    elif isinstance(value, (list, dict)):
+                        formatted_metadata[key] = json.dumps(value)
+                    else:
+                        formatted_metadata[key] = str(value)
+
+                # Add to Neo4j
+                doc_id = self.neo4j_helper.create_document(doc.page_content, formatted_metadata)
+                if doc_id:
                     console.print(f"[green]Successfully uploaded and processed: {source_path.name}")
                     return True
                 else:
-                    console.print(f"[red]Failed to add document to vector store: {source_path.name}")
+                    console.print(f"[red]Failed to add document to Neo4j: {source_path.name}")
                     return False
             else:
                 console.print(f"[red]Failed to process file: {source_path.name}")
@@ -268,6 +356,14 @@ class RAGSystem:
         try:
             stats = self.document_loader.get_document_stats()
             
+            # Parse JSON strings back to Python objects
+            try:
+                file_types = json.loads(stats["file_types"])
+                files = json.loads(stats["files"])
+            except json.JSONDecodeError:
+                console.print("[red]Error parsing document stats")
+                return
+            
             # Create table
             table = Table(title="Document Repository")
             table.add_column("Filename", style="cyan")
@@ -275,18 +371,18 @@ class RAGSystem:
             table.add_column("Size", style="green")
             table.add_column("Last Modified", style="yellow")
             
-            for file_info in stats["files"]:
+            for file_info in files:
                 if not filter_type or filter_type.lower() in file_info["content_type"].lower():
                     table.add_row(
                         file_info["name"],
                         file_info["content_type"],
-                        f"{file_info['size'] / 1024:.2f} KB",
-                        datetime.fromisoformat(file_info["last_modified"]).strftime("%Y-%m-%d %H:%M:%S")
+                        f"{float(file_info['size']) / 1024:.2f} KB",
+                        datetime.fromtimestamp(float(file_info["last_modified"])).strftime("%Y-%m-%d %H:%M:%S")
                     )
             
             console.print(table)
             console.print(f"\nTotal Files: {stats['total_files']}")
-            console.print(f"Total Size: {stats['total_size'] / 1024:.2f} KB")
+            console.print(f"Total Size: {float(stats['total_size']) / 1024:.2f} KB")
         except Exception as e:
             console.print(f"[red]Error listing files: {str(e)}")
 

@@ -35,11 +35,27 @@ class Neo4jHelper:
         # Initialize vector store and cache
         self._init_vector_store()
 
+    def _flatten_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """Flatten metadata to primitive types that Neo4j can store"""
+        flattened = {}
+        for key, value in metadata.items():
+            if isinstance(value, (str, int, float, bool)):
+                flattened[key] = value
+            elif isinstance(value, list):
+                # Convert list to string representation
+                flattened[key] = json.dumps(value)
+            elif isinstance(value, dict):
+                # Convert nested dict to string representation
+                flattened[key] = json.dumps(value)
+            else:
+                # Convert other types to string
+                flattened[key] = str(value)
+        return flattened
+
     def check_gds_plugin(self) -> bool:
         """Check if the Graph Data Science plugin is installed and available."""
         try:
             with self.driver.session(database=self.database) as session:
-                # Try to call a GDS function to verify plugin is installed and working
                 result = session.run("CALL gds.version() YIELD gdsVersion")
                 version = result.single()["gdsVersion"]
                 print(f"Neo4j Graph Data Science plugin version: {version}")
@@ -65,16 +81,16 @@ class Neo4jHelper:
                 """, index_name=self.index_name)
                 
                 if result.single()["count"] == 0:
-                    # Create vector index
+                    # Create vector index using new syntax
                     session.run("""
-                        CALL db.index.vector.createNodeIndex(
-                            $index_name,
-                            'Document',
-                            'embedding',
-                            4096,
-                            'cosine'
-                        )
-                    """, index_name=self.index_name)
+                        CREATE VECTOR INDEX `accounting_docs` IF NOT EXISTS
+                        FOR (n:Document)
+                        ON (n.embedding)
+                        OPTIONS {indexConfig: {
+                            `vector.dimensions`: 4096,
+                            `vector.similarity_function`: 'cosine'
+                        }}
+                    """)
                     print(f"Created vector index: {self.index_name}")
                     
                     # Check for existing documents without embeddings
@@ -107,228 +123,6 @@ class Neo4jHelper:
         except Exception as e:
             print(f"Error vectorizing documents: {str(e)}")
 
-    def similarity_search_with_graph(self, query: str, k: int = 4) -> List[Dict[str, Any]]:
-        """
-        Hybrid search combining vector similarity with graph traversal.
-        
-        This implements a hybrid search approach:
-        1. First finds similar documents using vector similarity
-        2. Then expands the context using graph relationships:
-           - Direct vector similarity relationships
-           - Content-based relationships
-           - Temporal relationships
-           - Type-based relationships
-        3. Combines and ranks the results
-        """
-        try:
-            # Get query embedding
-            query_embedding = self.embeddings.embed_query(query)
-            
-            with self.driver.session(database=self.database) as session:
-                # Execute hybrid search query
-                hybrid_query = """
-                // 1. Initial Vector Search
-                CALL db.index.vector.queryNodes($index_name, $k, $embedding)
-                YIELD node, score
-                WITH node, score
-                
-                // 2. Graph Traversal for Context Expansion
-                
-                // 2.1 Get directly similar documents through vector similarity
-                OPTIONAL MATCH (node)-[sim:SIMILAR]->(similar:Document)
-                
-                // 2.2 Get content-related documents
-                OPTIONAL MATCH (node)-[rel:RELATED_CONTENT]->(related:Document)
-                WHERE related <> similar
-                
-                // 2.3 Get temporal neighbors (documents from similar time periods)
-                OPTIONAL MATCH (node)-[temp:TEMPORAL]->(temporal:Document)
-                WHERE temporal <> similar 
-                  AND temporal <> related
-                
-                // 2.4 Get type-related documents (same document type)
-                OPTIONAL MATCH (node)-[:SHARES_TYPE]->(typeRelated:Document)
-                WHERE typeRelated <> similar 
-                  AND typeRelated <> related 
-                  AND typeRelated <> temporal
-                
-                // 3. Collect and Structure Results
-                WITH node, score,
-                     // Similar documents by vector similarity
-                     collect(DISTINCT {
-                         text: similar.text,
-                         similarity: sim.score,
-                         type: 'vector_similar',
-                         metadata: similar.metadata
-                     }) AS similar_docs,
-                     
-                     // Related documents by content
-                     collect(DISTINCT {
-                         text: related.text,
-                         relevance: rel.relevance,
-                         type: 'content_related',
-                         metadata: related.metadata
-                     }) AS related_docs,
-                     
-                     // Temporal neighbors
-                     collect(DISTINCT {
-                         text: temporal.text,
-                         time_diff: temp.time_diff,
-                         type: 'temporal',
-                         metadata: temporal.metadata
-                     }) AS temporal_docs,
-                     
-                     // Type-related documents
-                     collect(DISTINCT {
-                         text: typeRelated.text,
-                         type: 'same_type',
-                         metadata: typeRelated.metadata
-                     }) AS type_docs
-                
-                // 4. Return Final Results
-                RETURN 
-                    node.text AS text,
-                    score AS vector_score,
-                    {
-                        source: node.metadata.source,
-                        file_type: node.metadata.file_type,
-                        created_at: node.metadata.created_at,
-                        metadata: node.metadata,
-                        // Combine all related documents with their relationship types
-                        related_documents: similar_docs + related_docs + temporal_docs + type_docs
-                    } AS metadata
-                ORDER BY vector_score DESC
-                """
-                
-                # Execute the query with parameters
-                result = session.run(
-                    hybrid_query,
-                    index_name=self.index_name,
-                    embedding=query_embedding,
-                    k=k
-                )
-                
-                # Process and return results
-                documents = []
-                for record in result:
-                    doc = {
-                        "text": record["text"],
-                        "score": record["vector_score"],
-                        "metadata": record["metadata"]
-                    }
-                    
-                    # Add relationship information
-                    if record["metadata"]["related_documents"]:
-                        doc["relationships"] = {
-                            "similar": [d for d in record["metadata"]["related_documents"] if d["type"] == "vector_similar"],
-                            "content": [d for d in record["metadata"]["related_documents"] if d["type"] == "content_related"],
-                            "temporal": [d for d in record["metadata"]["related_documents"] if d["type"] == "temporal"],
-                            "type": [d for d in record["metadata"]["related_documents"] if d["type"] == "same_type"]
-                        }
-                    
-                    documents.append(doc)
-                
-                return documents
-                
-        except Exception as e:
-            print(f"Error in hybrid search: {str(e)}")
-            return []
-
-    def create_graph_relationships(self):
-        """Create relationships between documents using multiple criteria"""
-        try:
-            if not self.check_gds_plugin():
-                print("Neo4j Graph Data Science plugin is not available.")
-                return False
-
-            with self.driver.session(database=self.database) as session:
-                # First create the relationships in the database
-                # 1. Create vector similarity relationships using elementId()
-                session.run("""
-                MATCH (d1:Document)
-                MATCH (d2:Document)
-                WHERE elementId(d1) < elementId(d2)
-                WITH d1, d2, gds.similarity.cosine(d1.embedding, d2.embedding) AS similarity
-                WHERE similarity > 0.7
-                CREATE (d1)-[:SIMILAR {score: similarity}]->(d2)
-                """)
-
-                # 2. Create content-based relationships using embeddings
-                session.run("""
-                MATCH (d1:Document)
-                MATCH (d2:Document)
-                WHERE elementId(d1) < elementId(d2)
-                WITH d1, d2,
-                    gds.similarity.cosine(d1.embedding, d2.embedding) AS contentSimilarity
-                WHERE contentSimilarity > 0.3
-                CREATE (d1)-[:RELATED_CONTENT {relevance: contentSimilarity}]->(d2)
-                """)
-
-                # 3. Create temporal relationships with proper null handling
-                session.run("""
-                MATCH (d1:Document)
-                MATCH (d2:Document)
-                WHERE elementId(d1) < elementId(d2)
-                AND d1.metadata.created_at IS NOT NULL 
-                AND d2.metadata.created_at IS NOT NULL
-                WITH d1, d2,
-                    CASE
-                        WHEN d1.metadata.created_at IS NOT NULL 
-                            AND d2.metadata.created_at IS NOT NULL
-                        THEN abs(toInteger(d1.metadata.created_at) - toInteger(d2.metadata.created_at)) / 86400
-                        ELSE 999999
-                    END AS daysDiff
-                WHERE daysDiff <= 30
-                CREATE (d1)-[:TEMPORAL {time_diff: daysDiff}]->(d2)
-                """)
-
-                # 4. Create file type relationships
-                session.run("""
-                MATCH (d1:Document)
-                MATCH (d2:Document)
-                WHERE d1.file_type = d2.file_type AND elementId(d1) < elementId(d2)
-                CREATE (d1)-[:SHARES_TYPE]->(d2)
-                """)
-
-                # Now project the graph with the created relationships
-                project_query = """
-                CALL gds.graph.project(
-                    'doc_graph',
-                    'Document',
-                    {
-                        SIMILAR: {
-                            orientation: 'UNDIRECTED',
-                            properties: ['score']
-                        },
-                        RELATED_CONTENT: {
-                            orientation: 'UNDIRECTED',
-                            properties: ['relevance']
-                        },
-                        TEMPORAL: {
-                            orientation: 'UNDIRECTED',
-                            properties: ['time_diff']
-                        },
-                        SHARES_TYPE: {
-                            orientation: 'UNDIRECTED'
-                        }
-                    },
-                    {
-                        nodeProperties: ['embedding', 'text', 'file_type', 'metadata']
-                    }
-                )
-                """
-                session.run(project_query)
-
-                # Clean up the projected graph
-                self.safe_drop_graph("doc_graph")
-
-            return True
-        except Exception as e:
-            print(f"Error creating relationships: {str(e)}")
-            self.safe_drop_graph("doc_graph")
-            return False
-
-    # CRUD Operations
     def create_document(self, text: str, metadata: Dict[str, Any] = None) -> str:
         """Create a single document with vector embedding"""
         try:
@@ -337,26 +131,30 @@ class Neo4jHelper:
             
             if metadata is None:
                 metadata = {}
+            
+            # Add basic metadata
             metadata.update({
                 "id": doc_id,
                 "created_at": str(int(datetime.now().timestamp())),
                 "updated_at": str(int(datetime.now().timestamp()))
             })
             
+            # Flatten metadata for Neo4j storage
+            flattened_metadata = self._flatten_metadata(metadata)
+            
             with self.driver.session(database=self.database) as session:
                 result = session.run("""
-                    CREATE (d:Document {
-                        id: $id,
-                        text: $text,
-                        embedding: $embedding,
-                        metadata: $metadata
-                    })
+                    CREATE (d:Document)
+                    SET d.id = $id,
+                        d.text = $text,
+                        d.embedding = $embedding,
+                        d += $metadata
                     RETURN d.id as id
                 """, {
                     "id": doc_id,
                     "text": text,
                     "embedding": embedding,
-                    "metadata": metadata
+                    "metadata": flattened_metadata
                 })
                 return result.single()["id"]
         except Exception as e:
@@ -369,13 +167,16 @@ class Neo4jHelper:
             with self.driver.session(database=self.database) as session:
                 result = session.run("""
                     MATCH (d:Document {id: $id})
-                    RETURN d.text as text, d.metadata as metadata
+                    RETURN d
                 """, {"id": doc_id})
                 record = result.single()
                 if record:
+                    node = record["d"]
                     return {
-                        "text": record["text"],
-                        "metadata": record["metadata"]
+                        "id": node["id"],
+                        "text": node["text"],
+                        "metadata": {k: v for k, v in node.items() 
+                                  if k not in ["id", "text", "embedding"]}
                     }
                 return None
         except Exception as e:
@@ -402,8 +203,10 @@ class Neo4jHelper:
             if metadata is not None:
                 # Update timestamp
                 metadata["updated_at"] = str(int(datetime.now().timestamp()))
-                updates.append("d.metadata = $metadata")
-                params["metadata"] = metadata
+                # Flatten metadata
+                flattened_metadata = self._flatten_metadata(metadata)
+                updates.append("d += $metadata")
+                params["metadata"] = flattened_metadata
 
             if updates:
                 with self.driver.session(database=self.database) as session:
@@ -452,8 +255,68 @@ class Neo4jHelper:
             print(f"Error in bulk document creation: {str(e)}")
             return []
 
-    def search_documents(self, query: str, k: int = 4) -> List[Dict[str, Any]]:
-        """Search documents using vector similarity"""
+    def create_graph_relationships(self):
+        """Create relationships between documents using multiple criteria"""
+        try:
+            if not self.check_gds_plugin():
+                print("Neo4j Graph Data Science plugin is not available.")
+                return False
+
+            with self.driver.session(database=self.database) as session:
+                # Create vector similarity relationships
+                session.run("""
+                MATCH (d1:Document)
+                MATCH (d2:Document)
+                WHERE elementId(d1) < elementId(d2)
+                WITH d1, d2, gds.similarity.cosine(d1.embedding, d2.embedding) AS similarity
+                WHERE similarity > 0.7
+                CREATE (d1)-[:SIMILAR {score: similarity}]->(d2)
+                """)
+
+                # Create content-based relationships
+                session.run("""
+                MATCH (d1:Document)
+                MATCH (d2:Document)
+                WHERE elementId(d1) < elementId(d2)
+                WITH d1, d2,
+                    gds.similarity.cosine(d1.embedding, d2.embedding) AS contentSimilarity
+                WHERE contentSimilarity > 0.3
+                CREATE (d1)-[:RELATED_CONTENT {relevance: contentSimilarity}]->(d2)
+                """)
+
+                # Create temporal relationships
+                session.run("""
+                MATCH (d1:Document)
+                MATCH (d2:Document)
+                WHERE elementId(d1) < elementId(d2)
+                AND d1.created_at IS NOT NULL 
+                AND d2.created_at IS NOT NULL
+                WITH d1, d2,
+                    CASE
+                        WHEN d1.created_at IS NOT NULL 
+                            AND d2.created_at IS NOT NULL
+                        THEN abs(toInteger(d1.created_at) - toInteger(d2.created_at)) / 86400
+                        ELSE 999999
+                    END AS daysDiff
+                WHERE daysDiff <= 30
+                CREATE (d1)-[:TEMPORAL {time_diff: daysDiff}]->(d2)
+                """)
+
+                # Create file type relationships
+                session.run("""
+                MATCH (d1:Document)
+                MATCH (d2:Document)
+                WHERE d1.file_type = d2.file_type AND elementId(d1) < elementId(d2)
+                CREATE (d1)-[:SHARES_TYPE]->(d2)
+                """)
+
+            return True
+        except Exception as e:
+            print(f"Error creating relationships: {str(e)}")
+            return False
+
+    def similarity_search_with_graph(self, query: str, k: int = 4) -> List[Dict[str, Any]]:
+        """Hybrid search combining vector similarity with graph traversal"""
         try:
             query_embedding = self.embeddings.embed_query(query)
             
@@ -461,23 +324,60 @@ class Neo4jHelper:
                 result = session.run("""
                     CALL db.index.vector.queryNodes($index_name, $k, $embedding)
                     YIELD node, score
-                    RETURN node.text as text,
-                           node.metadata as metadata,
-                           score
-                    ORDER BY score DESC
+                    WITH node, score
+                    
+                    OPTIONAL MATCH (node)-[sim:SIMILAR]->(similar:Document)
+                    OPTIONAL MATCH (node)-[rel:RELATED_CONTENT]->(related:Document)
+                    OPTIONAL MATCH (node)-[temp:TEMPORAL]->(temporal:Document)
+                    OPTIONAL MATCH (node)-[:SHARES_TYPE]->(typeRelated:Document)
+                    
+                    RETURN 
+                        node.text AS text,
+                        score AS vector_score,
+                        node {.*, embedding: null} AS metadata,
+                        collect(DISTINCT {
+                            text: similar.text,
+                            score: sim.score,
+                            type: 'similar'
+                        }) AS similar_docs,
+                        collect(DISTINCT {
+                            text: related.text,
+                            relevance: rel.relevance,
+                            type: 'content'
+                        }) AS related_docs,
+                        collect(DISTINCT {
+                            text: temporal.text,
+                            time_diff: temp.time_diff,
+                            type: 'temporal'
+                        }) AS temporal_docs,
+                        collect(DISTINCT {
+                            text: typeRelated.text,
+                            type: 'same_type'
+                        }) AS type_docs
                 """, {
                     "index_name": self.index_name,
                     "embedding": query_embedding,
                     "k": k
                 })
                 
-                return [{
-                    "text": record["text"],
-                    "metadata": record["metadata"],
-                    "score": record["score"]
-                } for record in result]
+                documents = []
+                for record in result:
+                    doc = {
+                        "text": record["text"],
+                        "score": record["vector_score"],
+                        "metadata": record["metadata"],
+                        "relationships": {
+                            "similar": [d for d in record["similar_docs"] if d["text"]],
+                            "content": [d for d in record["related_docs"] if d["text"]],
+                            "temporal": [d for d in record["temporal_docs"] if d["text"]],
+                            "type": [d for d in record["type_docs"] if d["text"]]
+                        }
+                    }
+                    documents.append(doc)
+                
+                return documents
         except Exception as e:
-            print(f"Error searching documents: {str(e)}")
+            print(f"Error in hybrid search: {str(e)}")
             return []
 
     def get_document_count(self) -> int:
@@ -499,18 +399,35 @@ class Neo4jHelper:
             with self.driver.session(database=self.database) as session:
                 result = session.run("""
                     MATCH (d:Document)
-                    WHERE d.metadata[$key] = $value
-                    RETURN d.id as id, d.text as text, d.metadata as metadata
+                    WHERE d[$key] = $value
+                    RETURN d
                 """, {"key": key, "value": value})
                 
                 return [{
-                    "id": record["id"],
-                    "text": record["text"],
-                    "metadata": record["metadata"]
+                    "id": record["d"]["id"],
+                    "text": record["d"]["text"],
+                    "metadata": {k: v for k, v in record["d"].items() 
+                               if k not in ["id", "text", "embedding"]}
                 } for record in result]
         except Exception as e:
             print(f"Error getting documents by metadata: {str(e)}")
             return []
+
+    def safe_drop_graph(self, graph_name: str):
+        """Safely drop a projected graph if it exists"""
+        try:
+            with self.driver.session(database=self.database) as session:
+                session.run("""
+                    CALL gds.graph.exists($name)
+                    YIELD exists
+                    WITH exists
+                    WHERE exists
+                    CALL gds.graph.drop($name)
+                    YIELD graphName
+                    RETURN graphName
+                """, {"name": graph_name})
+        except Exception as e:
+            print(f"Error dropping graph {graph_name}: {str(e)}")
 
     def close(self):
         """Close the Neo4j driver connection"""
