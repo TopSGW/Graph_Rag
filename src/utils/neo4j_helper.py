@@ -49,7 +49,7 @@ class Neo4jHelper:
                             'accounting_docs',
                             'Document',
                             'embedding',
-                            4096,
+                            8192,
                             'cosine'
                         )
                     """)
@@ -108,7 +108,7 @@ class Neo4jHelper:
                     node_label="Document",
                     text_node_property="text",
                     embedding_node_property="embedding",
-                    embedding_dimension=4096  # dimension for llama3.3:70b embeddings
+                    embedding_dimension=8192
                 )
             else:
                 return Neo4jVector.from_existing_index(
