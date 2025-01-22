@@ -138,103 +138,28 @@ class Neo4jHelper:
             return False
 
     def create_graph_relationships(self):
-        """
-        Create relationships between documents using multiple criteria:
-        1. Vector similarity (using GDS nodeSimilarity)
-        2. Content-based relationships
-        3. Temporal relationships
-        4. Metadata relationships
-        5. File type relationships
-        """
+        """Create relationships between documents using multiple criteria"""
         try:
             if not self.check_gds_plugin():
                 print("Neo4j Graph Data Science plugin is not available.")
                 return False
 
             with self.driver.session(database=self.database) as session:
-                # Drop existing graph if any
-                self.safe_drop_graph("doc_graph")
-
-                # Project graph with all necessary properties
-                project_query = """
-                CALL gds.graph.project(
-                    'doc_graph',
-                    {
-                        Document: {
-                            properties: {
-                                embedding: {
-                                    property: 'embedding',
-                                    defaultValue: []
-                                },
-                                text: {
-                                    property: 'text',
-                                    defaultValue: ''
-                                },
-                                file_type: {
-                                    property: 'file_type',
-                                    defaultValue: ''
-                                },
-                                created_at: {
-                                    property: 'created_at',
-                                    defaultValue: datetime()
-                                },
-                                metadata: {
-                                    property: 'metadata',
-                                    defaultValue: {}
-                                }
-                            }
-                        }
-                    },
-                    {
-                        SIMILAR: {
-                            orientation: 'UNDIRECTED',
-                            properties: {
-                                score: {
-                                    property: 'score',
-                                    defaultValue: 0.0
-                                }
-                            }
-                        },
-                        SHARES_TYPE: {
-                            orientation: 'UNDIRECTED'
-                        },
-                        TEMPORAL: {
-                            orientation: 'UNDIRECTED',
-                            properties: {
-                                time_diff: {
-                                    property: 'time_diff',
-                                    defaultValue: 0
-                                }
-                            }
-                        },
-                        RELATED_CONTENT: {
-                            orientation: 'UNDIRECTED',
-                            properties: {
-                                relevance: {
-                                    property: 'relevance',
-                                    defaultValue: 0.0
-                                }
-                            }
-                        }
-                    }
-                )
-                """
-                session.run(project_query)
-
-                # Create vector similarity relationships
+                # First create the relationships in the database
+                # 1. Create vector similarity relationships
                 session.run("""
-                CALL gds.nodeSimilarity.write('doc_graph', {
-                    writeRelationshipType: 'SIMILAR',
-                    writeProperty: 'score',
-                    similarityMetric: 'cosine',
-                    topK: 5,
-                    similarityCutoff: 0.7
-                })
+                MATCH (d1:Document)
+                MATCH (d2:Document)
+                WHERE id(d1) < id(d2)
+                WITH d1, d2, gds.similarity.cosine(d1.embedding, d2.embedding) AS similarity
+                WHERE similarity > 0.7
+                CREATE (d1)-[:SIMILAR {score: similarity}]->(d2)
                 """)
 
-                # Create content-based relationships
+                # 2. Create content-based relationships
                 session.run("""
-                MATCH (d1:Document), (d2:Document)
+                MATCH (d1:Document)
+                MATCH (d2:Document)
                 WHERE id(d1) < id(d2)
                 WITH d1, d2,
                      gds.similarity.cosine(
@@ -245,9 +170,10 @@ class Neo4jHelper:
                 CREATE (d1)-[:RELATED_CONTENT {relevance: textSimilarity}]->(d2)
                 """)
 
-                # Create temporal relationships
+                # 3. Create temporal relationships
                 session.run("""
-                MATCH (d1:Document), (d2:Document)
+                MATCH (d1:Document)
+                MATCH (d2:Document)
                 WHERE id(d1) < id(d2)
                 WITH d1, d2,
                      duration.between(
@@ -258,14 +184,44 @@ class Neo4jHelper:
                 CREATE (d1)-[:TEMPORAL {time_diff: daysDiff}]->(d2)
                 """)
 
-                # Create file type relationships
+                # 4. Create file type relationships
                 session.run("""
-                MATCH (d1:Document), (d2:Document)
+                MATCH (d1:Document)
+                MATCH (d2:Document)
                 WHERE d1.file_type = d2.file_type AND id(d1) < id(d2)
                 CREATE (d1)-[:SHARES_TYPE]->(d2)
                 """)
 
-                # Clean up
+                # Now project the graph with the created relationships
+                project_query = """
+                CALL gds.graph.project(
+                    'doc_graph',
+                    'Document',
+                    {
+                        SIMILAR: {
+                            orientation: 'UNDIRECTED',
+                            properties: ['score']
+                        },
+                        RELATED_CONTENT: {
+                            orientation: 'UNDIRECTED',
+                            properties: ['relevance']
+                        },
+                        TEMPORAL: {
+                            orientation: 'UNDIRECTED',
+                            properties: ['time_diff']
+                        },
+                        SHARES_TYPE: {
+                            orientation: 'UNDIRECTED'
+                        }
+                    },
+                    {
+                        nodeProperties: ['embedding', 'text', 'file_type', 'created_at']
+                    }
+                )
+                """
+                session.run(project_query)
+
+                # Clean up the projected graph
                 self.safe_drop_graph("doc_graph")
 
             return True
