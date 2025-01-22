@@ -17,7 +17,6 @@ class Neo4jHelper:
         self.username = os.getenv("NEO4J_USER", "neo4j")
         self.password = os.getenv("NEO4J_PASSWORD", "neo4j")
         self.database = os.getenv("NEO4J_DATABASE", "neo4j")
-        self.index_name = "embedding_index"  # Changed to a more descriptive name
         
         # Initialize Ollama embeddings
         self.embeddings = OllamaEmbeddings(
@@ -28,106 +27,38 @@ class Neo4jHelper:
         # Initialize Neo4j driver
         self.driver = GraphDatabase.driver(self.url, auth=(self.username, self.password))
 
-    def _wait_for_index_online(self, index_name: str, max_attempts: int = 10) -> bool:
-        """Wait for the index to come online"""
-        attempt = 0
-        while attempt < max_attempts:
-            try:
-                with self.driver.session(database=self.database) as session:
-                    result = session.run("""
-                        SHOW INDEXES
-                        YIELD name, state
-                        WHERE name = $index_name
-                        RETURN state
-                    """, index_name=index_name)
-                    record = result.single()
-                    if record and record["state"] == "ONLINE":
-                        return True
-                    time.sleep(1)
-                    attempt += 1
-            except Exception as e:
-                print(f"Error checking index state: {str(e)}")
-                time.sleep(1)
-                attempt += 1
-        return False
-
     def _ensure_vector_index(self):
         """Ensure vector index exists and is online"""
         try:
             with self.driver.session(database=self.database) as session:
-                # Drop existing index if it exists
-                session.run("""
-                    DROP INDEX embedding_index IF EXISTS
+                # Check if index exists
+                result = session.run("""
+                    SHOW VECTOR INDEXES
+                    YIELD name, type, labelsOrTypes, properties, options
+                    WHERE labelsOrTypes = ['Document']
+                    AND properties = ['embedding']
+                    RETURN name
                 """)
+                existing_index = result.single()
                 
-                # Create the vector index
-                session.run("""
-                    CREATE VECTOR INDEX embedding_index
-                    FOR (d:Document)
-                    ON (d.embedding)
-                    OPTIONS {
-                        indexConfig: {
-                            `vector.dimensions`: 4096,
-                            `vector.similarity_function`: 'cosine'
-                        }
-                    }
-                """)
+                if not existing_index:
+                    # Create vector index if it doesn't exist
+                    session.run("""
+                        CALL db.index.vector.createNodeIndex(
+                            'document_embedding',
+                            'Document',
+                            'embedding',
+                            4096,
+                            'cosine'
+                        )
+                    """)
+                    print("Created new vector index")
+                else:
+                    print(f"Using existing vector index: {existing_index['name']}")
                 
-                # Wait for the index to come online
-                if not self._wait_for_index_online("embedding_index"):
-                    raise Exception("Vector index failed to come online")
-                
-                print("Vector index created and online")
         except Exception as e:
             print(f"Error ensuring vector index: {str(e)}")
             raise
-
-    def initialize_vector_store(self, documents: List[Dict[str, Any]] = None) -> Neo4jVector:
-        """Initialize Neo4j Vector store with documents if provided."""
-        try:
-            if documents:
-                # Create constraints and indexes if they don't exist
-                self._create_constraints_and_indexes()
-                
-                # Ensure vector index exists and is online
-                self._ensure_vector_index()
-                
-                # Format timestamps in metadata
-                for doc in documents:
-                    if 'metadata' in doc:
-                        if 'created_at' not in doc['metadata']:
-                            doc['metadata']['created_at'] = str(int(datetime.now().timestamp()))
-                        else:
-                            doc['metadata']['created_at'] = self._format_datetime(doc['metadata']['created_at'])
-                
-                return Neo4jVector.from_documents(
-                    documents=documents,
-                    embedding=self.embeddings,
-                    url=self.url,
-                    username=self.username,
-                    password=self.password,
-                    database=self.database,
-                    index_name=self.index_name,
-                    node_label="Document",
-                    text_node_property="text",
-                    embedding_node_property="embedding",
-                    embedding_dimension=4096  # dimension for llama3.3:70b embeddings
-                )
-            else:
-                return Neo4jVector.from_existing_index(
-                    embedding=self.embeddings,
-                    url=self.url,
-                    username=self.username,
-                    password=self.password,
-                    database=self.database,
-                    index_name=self.index_name,
-                    node_label="Document",
-                    text_node_property="text",
-                    embedding_node_property="embedding"
-                )
-        except Exception as e:
-            print(f"Error initializing vector store: {str(e)}")
-            return None
 
     def _format_datetime(self, timestamp) -> str:
         """Convert timestamp to Unix timestamp string"""
@@ -149,6 +80,50 @@ class Neo4jHelper:
         except Exception as e:
             print(f"Error formatting datetime: {str(e)}")
             return str(int(datetime.now().timestamp()))
+
+    def initialize_vector_store(self, documents: List[Dict[str, Any]] = None) -> Neo4jVector:
+        """Initialize Neo4j Vector store with documents if provided."""
+        try:
+            if documents:
+                # Create constraints and indexes if they don't exist
+                self._create_constraints_and_indexes()
+                
+                # Format timestamps in metadata
+                for doc in documents:
+                    if 'metadata' in doc:
+                        if 'created_at' not in doc['metadata']:
+                            doc['metadata']['created_at'] = str(int(datetime.now().timestamp()))
+                        else:
+                            doc['metadata']['created_at'] = self._format_datetime(doc['metadata']['created_at'])
+                
+                return Neo4jVector.from_documents(
+                    documents=documents,
+                    embedding=self.embeddings,
+                    url=self.url,
+                    username=self.username,
+                    password=self.password,
+                    database=self.database,
+                    index_name="document_embedding",
+                    node_label="Document",
+                    text_node_property="text",
+                    embedding_node_property="embedding",
+                    embedding_dimension=4096  # dimension for llama3.3:70b embeddings
+                )
+            else:
+                return Neo4jVector.from_existing_index(
+                    embedding=self.embeddings,
+                    url=self.url,
+                    username=self.username,
+                    password=self.password,
+                    database=self.database,
+                    index_name="document_embedding",
+                    node_label="Document",
+                    text_node_property="text",
+                    embedding_node_property="embedding"
+                )
+        except Exception as e:
+            print(f"Error initializing vector store: {str(e)}")
+            return None
 
     def _create_constraints_and_indexes(self):
         """Create necessary constraints and indexes"""
@@ -185,6 +160,10 @@ class Neo4jHelper:
                     CREATE INDEX document_metadata IF NOT EXISTS
                     FOR (d:Document) ON (d.metadata)
                 """)
+                
+                # Ensure vector index exists
+                self._ensure_vector_index()
+                
         except Exception as e:
             print(f"Error creating constraints and indexes: {str(e)}")
     
@@ -331,7 +310,7 @@ class Neo4jHelper:
             with self.driver.session(database=self.database) as session:
                 # Execute vector similarity search
                 vector_query = """
-                CALL db.index.vector.queryNodes($index_name, $k, $embedding)
+                CALL db.index.vector.queryNodes('document_embedding', $k, $embedding)
                 YIELD node, score
                 WITH node, score
                 
@@ -389,7 +368,6 @@ class Neo4jHelper:
                 
                 result = session.run(
                     vector_query,
-                    index_name=self.index_name,
                     embedding=query_embedding,
                     k=k
                 )
