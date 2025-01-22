@@ -118,13 +118,6 @@ class RAGSystem:
         """Initialize the RAG system with documents and vector store"""
         try:
             with Progress() as progress:
-                # First check if GDS plugin is available
-                if not self.neo4j_helper.check_gds_plugin():
-                    console.print("[red]Neo4j Graph Data Science plugin is not available.")
-                    console.print("[yellow]Please install the GDS plugin in your Neo4j database.")
-                    console.print("[yellow]Visit: https://neo4j.com/docs/graph-data-science/current/installation/")
-                    return False
-
                 task1 = progress.add_task("[cyan]Loading documents...", total=1)
                 # Load documents
                 documents = self.document_loader.load_documents()
