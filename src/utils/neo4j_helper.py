@@ -25,7 +25,7 @@ class Neo4jHelper:
         
         # Initialize Ollama embeddings with Llama 2 model (4096 dimensions)
         self.embeddings = OllamaEmbeddings(
-            model="llama2:70b",  # Using Llama 2 which has 4096 dimensions by default
+            model="llama3:8b",  # Using Llama 2 which has 4096 dimensions by default
             base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         )
         

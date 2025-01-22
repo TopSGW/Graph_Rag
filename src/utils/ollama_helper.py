@@ -12,7 +12,7 @@ class OllamaHelper:
     def __init__(self):
         # Initialize Ollama with llama2 70b model
         self.llm = OllamaLLM(
-            model="llama2:70b",
+            model="llama3:8b",
             callbacks=[StreamingStdOutCallbackHandler()],
             temperature=0.1,
             top_k=10,
