@@ -335,15 +335,15 @@ class Neo4jHelper:
                 CREATE (d1)-[:SHARES_TYPE]->(d2)
                 """)
 
-                # Log relationship counts with null handling
+                # Log relationship counts with proper aggregation
                 result = session.run("""
                 MATCH ()-[r]->()
-                WITH collect(r) as relationships
+                WITH COLLECT(type(r)) AS types
                 RETURN 
-                    count(r in relationships WHERE type(r) = 'SIMILAR') as similar_count,
-                    count(r in relationships WHERE type(r) = 'RELATED_CONTENT') as content_count,
-                    count(r in relationships WHERE type(r) = 'TEMPORAL') as temporal_count,
-                    count(r in relationships WHERE type(r) = 'SHARES_TYPE') as type_count
+                    SIZE([x IN types WHERE x = 'SIMILAR']) as similar_count,
+                    SIZE([x IN types WHERE x = 'RELATED_CONTENT']) as content_count,
+                    SIZE([x IN types WHERE x = 'TEMPORAL']) as temporal_count,
+                    SIZE([x IN types WHERE x = 'SHARES_TYPE']) as type_count
                 """)
                 counts = result.single()
                 print("\nRelationship counts:")
