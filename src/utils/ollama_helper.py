@@ -10,14 +10,15 @@ from langchain_core.output_parsers import StrOutputParser
 
 class OllamaHelper:
     def __init__(self):
-        # Initialize Ollama with llama2 70b model
+        # Initialize Ollama with llama2 model
         self.llm = OllamaLLM(
-            model="llama3:8b",
+            model="llama2",
             callbacks=[StreamingStdOutCallbackHandler()],
             temperature=0.1,
             top_k=10,
             top_p=0.95,
-            repeat_penalty=1.1
+            repeat_penalty=1.1,
+            num_ctx=4096
         )
 
         # Define specialized prompt templates for different query types
@@ -28,6 +29,7 @@ class OllamaHelper:
             Use only the provided context to answer the question.
             If you don't know the answer or can't find relevant information in the context, say so clearly.
             Always strive to provide concise, helpful, and context-aware answers.
+            Format your response in a clear, readable way.
             
             Context:
             {context}
@@ -42,6 +44,7 @@ class OllamaHelper:
             - Creation and modification dates
             - File metadata and categories
             - Organizing files by relevance
+            Format your response in a clear, readable way.
             
             Context:
             {context}
@@ -57,6 +60,7 @@ class OllamaHelper:
             - Categories of income and expenses
             - Trends and patterns in financial data
             Provide clear, accurate financial information while maintaining confidentiality.
+            Format your response in a clear, readable way.
             
             Context:
             {context}
@@ -71,6 +75,7 @@ class OllamaHelper:
             - Changes over time
             - Historical trends
             - Temporal relationships between events or documents
+            Format your response in a clear, readable way.
             
             Context:
             {context}
@@ -86,6 +91,7 @@ class OllamaHelper:
             - Relationships and connections
             - Personal history and timeline
             Maintain privacy and confidentiality while providing relevant information.
+            Format your response in a clear, readable way.
             
             Context:
             {context}
@@ -101,6 +107,7 @@ class OllamaHelper:
             - Image metadata
             - Visual relationships and patterns
             Describe visual content clearly and accurately.
+            Format your response in a clear, readable way.
             
             Context:
             {context}
@@ -116,6 +123,7 @@ class OllamaHelper:
             - Communication dates and timeline
             - Message content and context
             Maintain privacy while providing relevant information.
+            Format your response in a clear, readable way.
             
             Context:
             {context}
@@ -131,6 +139,7 @@ class OllamaHelper:
             - Income and deductions
             - Tax calculations and assessments
             Provide accurate tax information while maintaining confidentiality.
+            Format your response in a clear, readable way.
             
             Context:
             {context}
@@ -145,6 +154,7 @@ class OllamaHelper:
             - Document types and categories
             - Key information and excerpts
             - Document relationships
+            Format your response in a clear, readable way.
             
             Context:
             {context}
@@ -240,9 +250,14 @@ class OllamaHelper:
                 question=question
             )
             
-            # Get response from LLM
+            # Get response from LLM and ensure it's a string
             response = self.llm.invoke(prompt)
-            return response.content
+            if hasattr(response, 'content'):
+                return response.content
+            elif isinstance(response, str):
+                return response
+            else:
+                return str(response)
         except Exception as e:
             print(f"Error getting RAG response: {str(e)}")
             return "I apologize, but I encountered an error while processing your question."
@@ -257,7 +272,12 @@ class OllamaHelper:
                 question=question
             )
             response = self.llm.invoke(prompt)
-            return response.content
+            if hasattr(response, 'content'):
+                return response.content
+            elif isinstance(response, str):
+                return response
+            else:
+                return str(response)
         except Exception as e:
             print(f"Error getting direct response: {str(e)}")
             return "I apologize, but I encountered an error while processing your request."

@@ -282,7 +282,7 @@ class Neo4jHelper:
                 print("Creating similarity relationships...")
                 session.run("""
                 MATCH (d1:Document), (d2:Document)
-                WHERE id(d1) < id(d2)
+                WHERE elementId(d1) < elementId(d2)
                 AND d1.embedding IS NOT NULL 
                 AND d2.embedding IS NOT NULL
                 AND size(d1.embedding) > 0 
@@ -297,7 +297,7 @@ class Neo4jHelper:
                 print("Creating content relationships...")
                 session.run("""
                 MATCH (d1:Document), (d2:Document)
-                WHERE id(d1) < id(d2)
+                WHERE elementId(d1) < elementId(d2)
                 AND d1.embedding IS NOT NULL 
                 AND d2.embedding IS NOT NULL
                 AND size(d1.embedding) > 0 
@@ -312,7 +312,7 @@ class Neo4jHelper:
                 print("Creating temporal relationships...")
                 session.run("""
                 MATCH (d1:Document), (d2:Document)
-                WHERE id(d1) < id(d2)
+                WHERE elementId(d1) < elementId(d2)
                 AND d1.created_at IS NOT NULL 
                 AND d2.created_at IS NOT NULL
                 WITH d1, d2,
@@ -330,19 +330,20 @@ class Neo4jHelper:
                 print("Creating file type relationships...")
                 session.run("""
                 MATCH (d1:Document), (d2:Document)
-                WHERE id(d1) < id(d2)
+                WHERE elementId(d1) < elementId(d2)
                 AND d1.file_type = d2.file_type
                 CREATE (d1)-[:SHARES_TYPE]->(d2)
                 """)
 
-                # Log relationship counts
+                # Log relationship counts with null handling
                 result = session.run("""
                 MATCH ()-[r]->()
+                WITH collect(r) as relationships
                 RETURN 
-                    count(CASE WHEN type(r) = 'SIMILAR' THEN 1 END) as similar_count,
-                    count(CASE WHEN type(r) = 'RELATED_CONTENT' THEN 1 END) as content_count,
-                    count(CASE WHEN type(r) = 'TEMPORAL' THEN 1 END) as temporal_count,
-                    count(CASE WHEN type(r) = 'SHARES_TYPE' THEN 1 END) as type_count
+                    count(r in relationships WHERE type(r) = 'SIMILAR') as similar_count,
+                    count(r in relationships WHERE type(r) = 'RELATED_CONTENT') as content_count,
+                    count(r in relationships WHERE type(r) = 'TEMPORAL') as temporal_count,
+                    count(r in relationships WHERE type(r) = 'SHARES_TYPE') as type_count
                 """)
                 counts = result.single()
                 print("\nRelationship counts:")
@@ -358,6 +359,7 @@ class Neo4jHelper:
             import traceback
             traceback.print_exc()
             return False
+        
     def similarity_search_with_graph(self, query: str, k: int = 4) -> List[Dict[str, Any]]:
         """Hybrid search combining vector similarity with graph traversal"""
         try:
